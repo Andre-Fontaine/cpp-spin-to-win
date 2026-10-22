@@ -13,6 +13,20 @@ ASpinGameMode::ASpinGameMode()
 	DefaultPawnClass = nullptr;
 	PlayerControllerClass = ASpinPlayerController::StaticClass();
 	HUDClass = ASpinHUD::StaticClass();
+
+	// Button 0: always available.
+	FSpinPrompt First;
+	First.Label = TEXT("SPACE");
+	First.Hint = TEXT("SPACE / Left Click");
+	First.Color = FLinearColor(0.1f, 0.8f, 0.2f); // green
+	Prompts.Add(First);
+
+	// Button 1: unlocks at SecondButtonLevel.
+	FSpinPrompt Second;
+	Second.Label = TEXT("F");
+	Second.Hint = TEXT("F / Right Click");
+	Second.Color = FLinearColor(0.2f, 0.5f, 1.f); // blue
+	Prompts.Add(Second);
 }
 
 void ASpinGameMode::Tick(float DeltaSeconds)
@@ -46,7 +60,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	bHandWasInZone = bInZone;
 }
 
-void ASpinGameMode::HandleActionPressed()
+void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 {
 	switch (State)
 	{
@@ -55,13 +69,27 @@ void ASpinGameMode::HandleActionPressed()
 		break;
 
 	case ESpinState::Playing:
-		if (IsHandInZone())
+		// Buttons that haven't unlocked yet are simply ignored.
+		if (ButtonIndex >= GetNumActiveButtons())
+		{
+			break;
+		}
+
+		if (IsHandInZone() && ButtonIndex == ActivePromptIndex)
 		{
 			OnHit();
 		}
 		else
 		{
-			EndGame(); // pressed too early
+			EndGame(); // too early, or the wrong button
+		}
+		break;
+
+	case ESpinState::NewButtonIntro:
+		// The player must press the newly unlocked button (index 1) to confirm and continue.
+		if (ButtonIndex == 1)
+		{
+			ResumeAfterIntro();
 		}
 		break;
 
@@ -79,6 +107,29 @@ bool ASpinGameMode::IsHandInZone() const
 	return FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) <= ZoneHalfWidth;
 }
 
+int32 ASpinGameMode::GetLevel() const
+{
+	return 1 + Score / FMath::Max(1, HitsPerLevel);
+}
+
+int32 ASpinGameMode::GetLevelTarget() const
+{
+	return GetLevel() * FMath::Max(1, HitsPerLevel);
+}
+
+int32 ASpinGameMode::GetNumActiveButtons() const
+{
+	const int32 Wanted = (GetLevel() >= SecondButtonLevel) ? 2 : 1;
+	return FMath::Clamp(Wanted, 1, FMath::Max(1, Prompts.Num()));
+}
+
+bool ASpinGameMode::IsShowingLevelBanner() const
+{
+	return State == ESpinState::Playing
+		&& GetWorld()
+		&& (GetWorld()->GetTimeSeconds() - LevelUpTime) < LevelBannerDuration;
+}
+
 void ASpinGameMode::StartGame()
 {
 	State = ESpinState::Playing;
@@ -87,21 +138,51 @@ void ASpinGameMode::StartGame()
 	Direction = 1.f;
 	CurrentSpeed = StartSpeed;
 	ZoneHalfWidth = StartZoneHalfWidth;
+	ActivePromptIndex = 0;
+	LevelUpTime = -1000.f;
 	bHandWasInZone = false;
 	PlaceNextZone();
 }
 
 void ASpinGameMode::OnHit()
 {
+	const int32 OldLevel = GetLevel();
+
 	++Score;
 	HighScore = FMath::Max(HighScore, Score);
+
+	const int32 NewLevel = GetLevel();
+	const bool bUnlocksSecondButton = OldLevel < SecondButtonLevel && NewLevel >= SecondButtonLevel && Prompts.Num() > 1;
+
+	// The normal "LEVEL N" banner is skipped when the pause screen takes over instead.
+	if (NewLevel > OldLevel && GetWorld() && !bUnlocksSecondButton)
+	{
+		LevelUpTime = GetWorld()->GetTimeSeconds();
+	}
 
 	// Flip direction, speed up, shrink the zone, and pick the next target.
 	Direction = -Direction;
 	CurrentSpeed = FMath::Min(CurrentSpeed * SpeedMultiplier, MaxSpeed);
 	ZoneHalfWidth = FMath::Max(MinZoneHalfWidth, ZoneHalfWidth - ZoneShrinkPerHit);
 	bHandWasInZone = false;
+
+	// Alternate between the buttons that are unlocked at the new level.
+	ActivePromptIndex = (ActivePromptIndex + 1) % GetNumActiveButtons();
+
 	PlaceNextZone();
+
+	// Second button just unlocked: pause, reset the hand to its slowest speed, and wait for confirmation.
+	if (bUnlocksSecondButton)
+	{
+		CurrentSpeed = StartSpeed;
+		State = ESpinState::NewButtonIntro;
+	}
+}
+
+void ASpinGameMode::ResumeAfterIntro()
+{
+	State = ESpinState::Playing;
+	bHandWasInZone = false;
 }
 
 void ASpinGameMode::EndGame()
