@@ -6,6 +6,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "SpinGameMode.generated.h"
 
+class ASpinClock;
+
 UENUM(BlueprintType)
 enum class ESpinState : uint8
 {
@@ -13,7 +15,9 @@ enum class ESpinState : uint8
 	Playing,
 	GameOver,
 	/** Paused on the "new button unlocked" screen until the player presses the new button. */
-	NewButtonIntro
+	NewButtonIntro,
+	/** Paused on the "obstacles" tutorial screen until the player presses the lift button. */
+	ObstacleIntro
 };
 
 /** One button the player can be asked to press. Index in the Prompts array = button index. */
@@ -26,7 +30,7 @@ struct FSpinPrompt
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
 	FString Label;
 
-	/** Longer text for the on-screen hint, e.g. "SPACE / Left Click". */
+	/** Longer text for the on-screen hint, e.g. "SPACE / A / X". */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
 	FString Hint;
 
@@ -36,7 +40,7 @@ struct FSpinPrompt
 };
 
 /**
- * Owns all the rules for the clock-spinner game.
+ * Owns all the rules for the spinner game.
  * Angles are in degrees: 0 = 12 o'clock, positive = clockwise.
  *
  * Levels: every HitsPerLevel hits moves you up one level. The hit counter is cumulative
@@ -51,10 +55,17 @@ class SPINTOWIN_API ASpinGameMode : public AGameModeBase
 public:
 	ASpinGameMode();
 
+	virtual void StartPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** Called by the player controller. ButtonIndex 0 = first button, 1 = second button. */
 	void HandleButtonPressed(int32 ButtonIndex);
+
+	/** Called by the player controller when the lift button is pressed or released. */
+	void SetLiftHeld(bool bHeld);
+
+	/** Called by the clock when the hand has hopped over an obstacle: gives a life back. */
+	void OnObstacleCleared();
 
 	// ---------------- Levels ----------------
 
@@ -73,6 +84,48 @@ public:
 	/** The buttons in the game. Index 0 is always available; index 1 unlocks at SecondButtonLevel. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels")
 	TArray<FSpinPrompt> Prompts;
+
+	/** Once two buttons are in play, the same button can come up at most this many times in a row. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
+	int32 MaxSameButtonInRow = 3;
+
+	// ---------------- Obstacles ----------------
+
+	/** The level at which obstacles (and the lift) are introduced. Raise it to delay them.
+	 *  If this equals SecondButtonLevel, the new-button screen is shown and the obstacle tutorial is skipped. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
+	int32 ObstacleStartLevel = 2;
+
+	/** Chance (0..1) that a given zone comes with an obstacle in front of it. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
+	float ObstacleChance = 0.6f;
+
+	/** The obstacle is placed this many seconds of hand travel ahead of the hand, so there is time to react. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
+	float ObstacleWarningTime = 0.7f;
+
+	/** Closest an obstacle can be to the hand, in degrees. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
+	float MinObstacleDistance = 35.f;
+
+	/** Gap in degrees between the obstacle and the edge of the target zone. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
+	float ObstacleClearGap = 25.f;
+
+	/** Obstacles sit between these fractions of the dial radius. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
+	float ObstacleMinRadiusFraction = 0.4f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
+	float ObstacleMaxRadiusFraction = 0.75f;
+
+	/** Lives the player starts a run with. They only come into play once obstacles are available. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
+	int32 MaxLives = 5;
+
+	/** Camera shake when a life is lost. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
+	float LifeLostShake = 0.35f;
 
 	// ---------------- Tuning ----------------
 
@@ -104,13 +157,27 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float MinZoneOffset = 70.f;
 
-	/** Next zone appears at most this many degrees ahead of the hand. */
+	/** Next zone appears at most this many degrees ahead of the hand (obstacles can push it further). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float MaxZoneOffset = 200.f;
 
 	/** Seconds after game over before a button press restarts (avoids accidental restarts). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float RestartDelay = 0.6f;
+
+	// ---------------- Feel (camera shake strength, 0..1) ----------------
+
+	/** Small shake on every successful hit. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
+	float HitShake = 0.15f;
+
+	/** Medium shake on a level-up. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
+	float LevelUpShake = 0.4f;
+
+	/** Big shake when the run ends. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
+	float GameOverShake = 1.0f;
 
 	// ---------------- State (read by the HUD) ----------------
 
@@ -149,6 +216,22 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float LevelUpTime = -1000.f;
 
+	/** Lives left this run. Only relevant once obstacles are available. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 Lives = 5;
+
+	/** World time of the last life lost, used for HUD feedback. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float LifeLostTime = -1000.f;
+
+	/** World time of the last life gained, used for HUD feedback. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float LifeGainedTime = -1000.f;
+
+	/** True if the run ended because the player ran out of lives. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bOutOfLives = false;
+
 	/** True while the hand is inside the target zone. */
 	bool IsHandInZone() const;
 
@@ -164,13 +247,26 @@ public:
 	/** True for a short time after a level-up. */
 	bool IsShowingLevelBanner() const;
 
+	/** The in-world dial, spawned when play starts. */
+	ASpinClock* GetClock() const;
+
 private:
+	void Shake(float Intensity);
+
 	void StartGame();
 	void OnHit();
 	void EndGame();
-	void PlaceNextZone();
+	void PickNextPrompt();
+	void PlaceNextZone(bool bAllowObstacle = true);
 	void ResumeAfterIntro();
+	void LoseLife();
+
+	UPROPERTY()
+	TObjectPtr<ASpinClock> Clock;
 
 	bool bHandWasInZone = false;
 	float GameOverTime = 0.f;
+
+	/** How many zones in a row have needed the current button. */
+	int32 PromptStreak = 1;
 };
