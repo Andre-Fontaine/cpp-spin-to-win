@@ -92,6 +92,14 @@ public:
 	/** True if the hand, at the given angle and its current height, is touching an obstacle. */
 	bool IsHandHittingObstacle(float HandAngleDeg) const;
 
+	// ---------------- Jam ----------------
+
+	/** Sparks shoot from where the hand meets the hub. */
+	void SetSparking(bool bSparking);
+
+	/** A jammed hand tilts and turns orange-brown ("broken") while it keeps spinning. */
+	void SetJammed(bool bJammed);
+
 	// ---------------- Layout ----------------
 
 	/** Radius of the dial in world units. Everything else scales from this. */
@@ -190,9 +198,11 @@ private:
 	void UpdateObstacles(float DeltaSeconds);
 	void UpdateObstaclePassing(ASpinGameMode& GM);
 	void UpdateShake(float DeltaSeconds);
+	void UpdateSparks(float DeltaSeconds);
 
 	static constexpr int32 NumZoneSegments = 48;
 	static constexpr int32 NumObstacleSlots = 4;
+	static constexpr int32 NumSparks = 40;
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
@@ -219,6 +229,12 @@ private:
 	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleMeshes;
 
 	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> SparkMeshes;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> SparkMID;
+
+	UPROPERTY()
 	TObjectPtr<UCameraComponent> Camera;
 
 	UPROPERTY()
@@ -239,6 +255,20 @@ private:
 	TWeakObjectPtr<ASpinGameMode> GameMode;
 
 	TArray<FObstacleState> ObstacleStates;
+
+	/** Plain bookkeeping for one spark particle. */
+	struct FSpark
+	{
+		FVector Velocity = FVector::ZeroVector;
+		FVector Location = FVector::ZeroVector;
+		float Age = 0.f;
+		float Life = 0.f; // 0 = unused
+	};
+	TArray<FSpark> Sparks;
+	float SparkSpawnAccumulator = 0.f;
+	bool bSparking = false;
+	bool bJammed = false;
+	float JamWobbleTime = 0.f;
 
 	FVector CameraBaseLocation = FVector::ZeroVector;
 	FRotator CameraBaseRotation = FRotator::ZeroRotator;

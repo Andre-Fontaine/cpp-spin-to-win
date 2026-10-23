@@ -8,8 +8,8 @@
 
 /**
  * Maps physical inputs to game actions and forwards them to the game mode.
- *   Hit button 0: Space / Gamepad A (Cross)
- *   Hit button 1: F     / Gamepad B (Circle)
+ *   Hit button 0: W / Gamepad A (Cross)
+ *   Hit button 1: D / Gamepad B (Circle)
  *   Lift (hold):  Left Mouse Button / Gamepad Right Trigger (R2)
  */
 UCLASS()

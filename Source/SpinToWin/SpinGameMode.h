@@ -14,10 +14,42 @@ enum class ESpinState : uint8
 	WaitingToStart,
 	Playing,
 	GameOver,
-	/** Paused on the "new button unlocked" screen until the player presses the new button. */
+	/** Endless: paused on the "new button unlocked" screen until the player presses the new button. */
 	NewButtonIntro,
-	/** Paused on the "obstacles" tutorial screen until the player presses the lift button. */
-	ObstacleIntro
+	/** Endless: paused on the "obstacles" screen until the player holds the lift button. */
+	ObstacleIntro,
+	/** Tutorial: paused on a level's explanation screen until the player presses its confirm button. */
+	TutorialIntro,
+	/** Tutorial finished. */
+	TutorialComplete
+};
+
+UENUM(BlueprintType)
+enum class ESpinMode : uint8
+{
+	/** The 7 guided levels. Nothing can be failed. */
+	Tutorial,
+	/** The real game. Mistakes cost lives or end the run. */
+	Endless
+};
+
+UENUM(BlueprintType)
+enum class EJamPhase : uint8
+{
+	None,
+	/** Sparks at the centre, the hand still works normally. */
+	Sparking,
+	/** The hand is broken: it keeps spinning, ignores everything, and must be fixed by mashing a button. */
+	Jammed
+};
+
+/** Which input confirms a tutorial level's explanation screen. */
+UENUM(BlueprintType)
+enum class ETutorialConfirm : uint8
+{
+	FirstButton,
+	SecondButton,
+	Lift
 };
 
 /** One button the player can be asked to press. Index in the Prompts array = button index. */
@@ -26,11 +58,11 @@ struct FSpinPrompt
 {
 	GENERATED_BODY()
 
-	/** Short text drawn on the target zone, e.g. "SPACE". */
+	/** Short text drawn on the target zone, e.g. "W". */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
 	FString Label;
 
-	/** Longer text for the on-screen hint, e.g. "SPACE / A / X". */
+	/** Longer text for the on-screen hint, e.g. "W / A / X". */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
 	FString Hint;
 
@@ -39,13 +71,68 @@ struct FSpinPrompt
 	FLinearColor Color = FLinearColor(0.1f, 0.8f, 0.2f);
 };
 
+/** One tutorial level. Edit the list in SpinGameMode.cpp (BuildTutorialLevels) to retune the tutorial. */
+USTRUCT(BlueprintType)
+struct FTutorialLevel
+{
+	GENERATED_BODY()
+
+	/** Big heading on the explanation screen. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	FString Title;
+
+	/** Lines of explanation on the screen shown before the level starts. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	TArray<FString> IntroLines;
+
+	/** One short reminder shown at the top while playing the level. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	FString Instruction;
+
+	/** What the player does to dismiss the explanation screen. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	ETutorialConfirm Confirm = ETutorialConfirm::FirstButton;
+
+	/** Successful hits needed to finish the level. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	int32 Hits = 10;
+
+	/** Hand speed in degrees per second. It does not change during the level. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	float Speed = 70.f;
+
+	/** Half-width of the target zone in degrees. It does not change during the level. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	float ZoneHalfWidth = 45.f;
+
+	/** How many buttons are in play (1 or 2). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	int32 NumButtons = 1;
+
+	/** Which button the first zone of the level needs (use 1 to showcase a new second button). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	int32 FirstPrompt = 0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	bool bObstacles = false;
+
+	/** Chance (0..1) that a zone comes with an obstacle, when obstacles are on. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	float ObstacleChance = 0.7f;
+
+	/** A jam starts (sparks) right after the player reaches each of these hit counts. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
+	TArray<int32> JamAtHits;
+};
+
 /**
  * Owns all the rules for the spinner game.
  * Angles are in degrees: 0 = 12 o'clock, positive = clockwise.
  *
- * Levels: every HitsPerLevel hits moves you up one level. The hit counter is cumulative
- * (level 1 = 0..10, level 2 = 10..20, ...). Difficulty ramps continuously with every hit,
- * so levels get steadily harder without any hard reset.
+ * Two modes:
+ *  - Tutorial: 7 short, unfailable levels, each with fixed speed and zone size.
+ *  - Endless: every HitsPerLevel hits moves you up a level (cumulative counter), difficulty ramps with every
+ *    hit, mistakes cost lives or end the run.
  */
 UCLASS()
 class SPINTOWIN_API ASpinGameMode : public AGameModeBase
@@ -67,7 +154,39 @@ public:
 	/** Called by the clock when the hand has hopped over an obstacle: gives a life back. */
 	void OnObstacleCleared();
 
-	// ---------------- Levels ----------------
+	// ---------------- Tutorial ----------------
+
+	/** The tutorial levels, built in BuildTutorialLevels(). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tutorial")
+	TArray<FTutorialLevel> TutorialLevels;
+
+	/** How long a tutorial message ("Try again!") stays on screen, in seconds. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tutorial")
+	float NoticeDuration = 2.5f;
+
+	// ---------------- Jam ----------------
+
+	/** Seconds of sparks before the hand jams. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam")
+	float JamSparkTime = 3.f;
+
+	/** Presses of the first button needed to fix a jam. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam", meta = (ClampMin = "1"))
+	int32 JamPressesRequired = 5;
+
+	/** Seconds the player has to fix a jam before the hand breaks (Endless). The tutorial just restarts the attempt. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam")
+	float JamTimeLimit = 3.f;
+
+	/** Endless: jams can start from this level on. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam", meta = (ClampMin = "1"))
+	int32 JamStartLevel = 7;
+
+	/** Endless: chance (0..1) that a successful hit is followed by a jam. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam", meta = (ClampMin = "0", ClampMax = "1"))
+	float JamChance = 0.12f;
+
+	// ---------------- Levels (Endless) ----------------
 
 	/** Hits needed to clear each level. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
@@ -91,12 +210,12 @@ public:
 
 	// ---------------- Obstacles ----------------
 
-	/** The level at which obstacles (and the lift) are introduced. Raise it to delay them.
-	 *  If this equals SecondButtonLevel, the new-button screen is shown and the obstacle tutorial is skipped. */
+	/** Endless: the level at which obstacles (and the lift) are introduced.
+	 *  If this equals SecondButtonLevel, the new-button screen is shown and the obstacle screen is skipped. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
 	int32 ObstacleStartLevel = 2;
 
-	/** Chance (0..1) that a given zone comes with an obstacle in front of it. */
+	/** Endless: chance (0..1) that a given zone comes with an obstacle in front of it. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
 	float ObstacleChance = 0.6f;
 
@@ -119,7 +238,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
 	float ObstacleMaxRadiusFraction = 0.75f;
 
-	/** Lives the player starts a run with. They only come into play once obstacles are available. */
+	/** Lives the player starts a run with. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
 	int32 MaxLives = 5;
 
@@ -127,7 +246,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
 	float LifeLostShake = 0.35f;
 
-	// ---------------- Tuning ----------------
+	// ---------------- Tuning (Endless) ----------------
 
 	/** Hand speed at the start of a run, in degrees per second. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -185,6 +304,9 @@ public:
 	ESpinState State = ESpinState::WaitingToStart;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	ESpinMode Mode = ESpinMode::Endless;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float HandAngle = 0.f;
 
 	/** +1 = clockwise, -1 = counter-clockwise. */
@@ -200,7 +322,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float ZoneHalfWidth = 32.f;
 
-	/** Total hits this run (cumulative across levels). */
+	/** Total hits this Endless run (cumulative across levels). */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 Score = 0;
 
@@ -216,7 +338,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float LevelUpTime = -1000.f;
 
-	/** Lives left this run. Only relevant once obstacles are available. */
+	/** Lives left this run. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 Lives = 5;
 
@@ -232,34 +354,103 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bOutOfLives = false;
 
+	/** True if the run ended because a jam was not fixed in time. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bHandBroke = false;
+
+	/** Index into TutorialLevels of the level being played. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 TutorialIndex = 0;
+
+	/** Successful hits so far in the current tutorial level. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 TutorialHits = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	EJamPhase JamPhase = EJamPhase::None;
+
+	/** Seconds spent in the current jam phase. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float JamTimer = 0.f;
+
+	/** Presses made so far towards fixing the current jam. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 JamPresses = 0;
+
+	/** The latest on-screen message and when it appeared. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	FString NoticeText;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float NoticeTime = -1000.f;
+
+	bool IsTutorial() const;
+
+	/** The tutorial level being played, or null. */
+	const FTutorialLevel* GetTutorialLevel() const;
+
 	/** True while the hand is inside the target zone. */
 	bool IsHandInZone() const;
 
-	/** Current level, starting at 1. */
+	/** Current Endless level, starting at 1. */
 	int32 GetLevel() const;
 
-	/** Total hits needed to finish the current level (10, 20, 30, ...). */
+	/** Total hits needed to finish the current Endless level (10, 20, 30, ...). */
 	int32 GetLevelTarget() const;
 
-	/** How many buttons are in play at the current level. */
+	/** How many buttons are in play right now. */
 	int32 GetNumActiveButtons() const;
 
-	/** True for a short time after a level-up. */
+	/** True when obstacles (and the lift) are part of the current level. */
+	bool ObstaclesEnabled() const;
+
+	/** True for a short time after an Endless level-up. */
 	bool IsShowingLevelBanner() const;
+
+	/** True for a short time after ShowNotice. */
+	bool IsShowingNotice() const;
+
+	/** 0..1 progress towards fixing the current jam. */
+	float GetJamProgress() const;
+
+	/** 1..0 fraction of the jam time limit that is left. */
+	float GetJamTimeFraction() const;
 
 	/** The in-world dial, spawned when play starts. */
 	ASpinClock* GetClock() const;
 
 private:
+	void BuildTutorialLevels();
 	void Shake(float Intensity);
+	void ShowNotice(const FString& Text);
 
+	// Endless
 	void StartGame();
 	void OnHit();
 	void EndGame();
-	void PickNextPrompt();
-	void PlaceNextZone(bool bAllowObstacle = true);
 	void ResumeAfterIntro();
 	void LoseLife();
+
+	// Tutorial
+	void StartTutorial();
+	void BeginTutorialLevel(int32 Index);
+	void BeginTutorialPlay();
+	void HandleTutorialPress(int32 ButtonIndex);
+	void OnTutorialHit();
+	void OnTutorialMiss();
+	void RespawnObstacleForCurrentZone();
+	void ReturnToTitle();
+
+	// Jam
+	void StartJamSparks();
+	void UpdateJam(float DeltaSeconds);
+	void RegisterJamPress();
+	void FixJam();
+	void ResetJam();
+
+	// Shared
+	void PickNextPrompt();
+	void PlaceNextZone(bool bAllowObstacle = true);
 
 	UPROPERTY()
 	TObjectPtr<ASpinClock> Clock;
@@ -269,4 +460,10 @@ private:
 
 	/** How many zones in a row have needed the current button. */
 	int32 PromptStreak = 1;
+
+	/** Tutorial: the hand touched an obstacle on this lap, so the zone does not count until it goes around again. */
+	bool bZoneTainted = false;
+
+	/** Tutorial: stops the "you hit an obstacle" message from repeating every frame. */
+	bool bTutorialObstacleHit = false;
 };

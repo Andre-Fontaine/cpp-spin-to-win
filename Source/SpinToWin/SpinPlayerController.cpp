@@ -15,11 +15,11 @@ void ASpinPlayerController::SetupInputComponent()
 	}
 
 	// Hit button 0
-	InputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &ASpinPlayerController::OnButton0);
+	InputComponent->BindKey(EKeys::W, IE_Pressed, this, &ASpinPlayerController::OnButton0);
 	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &ASpinPlayerController::OnButton0);
 
 	// Hit button 1
-	InputComponent->BindKey(EKeys::F, IE_Pressed, this, &ASpinPlayerController::OnButton1);
+	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &ASpinPlayerController::OnButton1);
 	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &ASpinPlayerController::OnButton1);
 
 	// Lift: hold to keep the hand raised.

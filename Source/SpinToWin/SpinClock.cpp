@@ -72,6 +72,14 @@ ASpinClock::ASpinClock()
 	}
 	ObstacleStates.SetNum(NumObstacleSlots);
 
+	for (int32 i = 0; i < NumSparks; ++i)
+	{
+		UStaticMeshComponent* Spark = MakeMesh(*FString::Printf(TEXT("Spark%d"), i), CubeMesh, Root);
+		Spark->SetCastShadow(false);
+		SparkMeshes.Add(Spark);
+	}
+	Sparks.SetNum(NumSparks);
+
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(Root);
 	Camera->bConstrainAspectRatio = false; // no black bars on non-16:9 windows
@@ -124,6 +132,12 @@ void ASpinClock::BuildVisuals()
 		Post->SetVisibility(false);
 	}
 
+	// Sparks: tiny glowing blocks, hidden until needed.
+	for (UStaticMeshComponent* Spark : SparkMeshes)
+	{
+		Spark->SetVisibility(false);
+	}
+
 	// Colours.
 	auto MakeMID = [](UStaticMeshComponent* Comp, const FLinearColor& Color) -> UMaterialInstanceDynamic*
 	{
@@ -146,6 +160,16 @@ void ASpinClock::BuildVisuals()
 		for (UStaticMeshComponent* Segment : ZoneSegments)
 		{
 			Segment->SetMaterial(0, ZoneMID);
+		}
+
+		SparkMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+		if (SparkMID)
+		{
+			SparkMID->SetVectorParameterValue(ColorParam, FLinearColor(1.f, 0.85f, 0.2f));
+		}
+		for (UStaticMeshComponent* Spark : SparkMeshes)
+		{
+			Spark->SetMaterial(0, SparkMID);
 		}
 
 		ObstacleMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
@@ -197,7 +221,16 @@ void ASpinClock::Tick(float DeltaSeconds)
 
 	if (const ASpinGameMode* GM = GameMode.Get())
 	{
-		HandPivot->SetRelativeRotation(FRotator(0.f, GM->HandAngle, 0.f));
+		// A jammed hand is visibly bent and shudders: the pivot tilts and its heading jitters.
+		FRotator HandRotation(0.f, GM->HandAngle, 0.f);
+		if (bJammed)
+		{
+			JamWobbleTime += DeltaSeconds;
+			HandRotation.Pitch = 9.f;
+			HandRotation.Roll = 7.f;
+			HandRotation.Yaw += FMath::Sin(JamWobbleTime * 45.f) * 1.5f;
+		}
+		HandPivot->SetRelativeRotation(HandRotation);
 		HandPivot->SetRelativeLocation(FVector(0.f, 0.f, HandLift));
 
 		UpdateZone(*GM);
@@ -205,7 +238,84 @@ void ASpinClock::Tick(float DeltaSeconds)
 	}
 
 	UpdateObstacles(DeltaSeconds);
+	UpdateSparks(DeltaSeconds);
 	UpdateShake(DeltaSeconds);
+}
+
+void ASpinClock::SetSparking(bool bNewSparking)
+{
+	bSparking = bNewSparking;
+}
+
+void ASpinClock::SetJammed(bool bNewJammed)
+{
+	bJammed = bNewJammed;
+	if (!bJammed)
+	{
+		JamWobbleTime = 0.f;
+	}
+}
+
+void ASpinClock::UpdateSparks(float DeltaSeconds)
+{
+	// Emit new sparks from the hub while sparking.
+	if (bSparking)
+	{
+		SparkSpawnAccumulator += DeltaSeconds * 45.f; // sparks per second
+		while (SparkSpawnAccumulator >= 1.f)
+		{
+			SparkSpawnAccumulator -= 1.f;
+			for (FSpark& S : Sparks)
+			{
+				if (S.Life <= 0.f)
+				{
+					S.Age = 0.f;
+					S.Life = FMath::FRandRange(0.25f, 0.55f);
+					S.Location = FVector(0.f, 0.f, 18.f);
+					const float Angle = FMath::FRandRange(0.f, 2.f * PI);
+					const float Speed = FMath::FRandRange(80.f, 260.f);
+					S.Velocity = FVector(FMath::Cos(Angle) * Speed, FMath::Sin(Angle) * Speed, FMath::FRandRange(120.f, 320.f));
+					break;
+				}
+			}
+		}
+	}
+	else
+	{
+		SparkSpawnAccumulator = 0.f;
+	}
+
+	// Move and shrink the live ones.
+	for (int32 i = 0; i < Sparks.Num(); ++i)
+	{
+		FSpark& S = Sparks[i];
+		UStaticMeshComponent* Mesh = SparkMeshes[i];
+		if (S.Life <= 0.f)
+		{
+			continue;
+		}
+
+		S.Age += DeltaSeconds;
+		if (S.Age >= S.Life)
+		{
+			S.Life = 0.f;
+			Mesh->SetVisibility(false);
+			continue;
+		}
+
+		S.Velocity.Z -= 700.f * DeltaSeconds; // gravity
+		S.Location += S.Velocity * DeltaSeconds;
+		if (S.Location.Z < 2.f)
+		{
+			S.Location.Z = 2.f;
+			S.Velocity.Z = FMath::Abs(S.Velocity.Z) * 0.3f;
+		}
+
+		const float Size = 5.f * (1.f - S.Age / S.Life) + 1.f;
+		Mesh->SetVisibility(true);
+		Mesh->SetRelativeLocation(S.Location);
+		Mesh->SetRelativeScale3D(FVector(Size / 100.f));
+	}
 }
 
 void ASpinClock::UpdateZone(const ASpinGameMode& GM)
@@ -275,6 +385,10 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 		{
 			HandColor = FLinearColor::Red;
 		}
+		else if (bJammed)
+		{
+			HandColor = FLinearColor(0.75f, 0.3f, 0.08f); // broken: orange-brown
+		}
 		else if (IsHandRaised())
 		{
 			HandColor = FLinearColor(0.4f, 0.9f, 1.f);
@@ -297,7 +411,7 @@ bool ASpinClock::IsHandRaised() const
 bool ASpinClock::IsLiftAvailable() const
 {
 	const ASpinGameMode* GM = GameMode.Get();
-	if (!GM || GM->State != ESpinState::Playing)
+	if (!GM || GM->State != ESpinState::Playing || bJammed)
 	{
 		return false;
 	}
@@ -320,7 +434,7 @@ void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM)
 	float Moved = FMath::Abs(FMath::FindDeltaAngleDegrees(PrevHandAngle, GM.HandAngle));
 	PrevHandAngle = GM.HandAngle;
 
-	if (GM.State != ESpinState::Playing || Moved > 45.f)
+	if (GM.State != ESpinState::Playing || bJammed || Moved > 45.f)
 	{
 		return;
 	}
