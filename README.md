@@ -16,7 +16,7 @@ Early prototype.
 
 - [x] Core loop: spinning hand, target zone, increasing speed, game over
 - [ ] Saved local leaderboard
-- [ ] Extra buttons / prompts that unlock as you progress
+- [x] Extra buttons / prompts that unlock as you progress
 - [ ] Online leaderboard
 
 ## About this repo
