@@ -8,7 +8,7 @@ A clock-style hand sweeps around a dial. Press the button while the hand is insi
 
 | Input | Action |
 |---|---|
-| Space / Left Click / Gamepad A | Start, hit the zone, restart after game over |
+| WASD / Left Click/Right Trigger / Gamepad ABXY | Start, hit the zone, restart after game over |
 
 ## Status
 
