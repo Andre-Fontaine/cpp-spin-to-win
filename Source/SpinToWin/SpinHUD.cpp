@@ -66,6 +66,28 @@ void ASpinHUD::DrawHUD()
 		}
 	}
 
+	// Miss lives (Endless only): a separate, non-regenerating pool spent on missed target zones.
+	if (!bTitle && !bTutorial && GM->State != ESpinState::TutorialComplete)
+	{
+		const float Size = 18.f;
+		const float Gap = 8.f;
+		const float RowWidth = GM->MaxMissLives * Size + (GM->MaxMissLives - 1) * Gap;
+		const float RowX = CX - RowWidth * 0.5f;
+		const float RowY = TopY + 118.f;
+
+		DrawCenteredText(TEXT("MISSES"), CX, RowY - 20.f, DimColor, 0.85f);
+		for (int32 i = 0; i < GM->MaxMissLives; ++i)
+		{
+			const FLinearColor BoxColor = (i < GM->MissLives) ? FLinearColor(1.f, 0.65f, 0.1f) : FLinearColor(0.2f, 0.2f, 0.24f);
+			DrawRect(BoxColor, RowX + i * (Size + Gap), RowY, Size, Size);
+		}
+
+		if (GetWorld()->GetTimeSeconds() - GM->MissLifeLostTime < 1.2f)
+		{
+			DrawCenteredText(TEXT("-1 MISS LIFE  (doesn't come back)"), CX, RowY + 28.f, FLinearColor(1.f, 0.65f, 0.1f), 1.0f);
+		}
+	}
+
 	// Lives (only once obstacles are in play). In the tutorial they are shown but never go down.
 	if (!bTitle && GM->State != ESpinState::TutorialComplete && GM->ObstaclesEnabled())
 	{
@@ -73,7 +95,7 @@ void ASpinHUD::DrawHUD()
 		const float Gap = 10.f;
 		const float RowWidth = GM->MaxLives * Size + (GM->MaxLives - 1) * Gap;
 		const float RowX = CX - RowWidth * 0.5f;
-		const float RowY = TopY + (bTutorial ? 80.f : 118.f);
+		const float RowY = TopY + (bTutorial ? 80.f : 165.f);
 
 		for (int32 i = 0; i < GM->MaxLives; ++i)
 		{
@@ -98,11 +120,33 @@ void ASpinHUD::DrawHUD()
 
 	if (bTitle)
 	{
-		DrawCenteredText(TEXT("SPIN TO WIN"), CX, MessageY, FLinearColor::Yellow, 2.4f);
+		// Full-screen main menu: a dark backdrop over the idle dial, title, and two mode cards.
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.72f), 0.f, 0.f, W, H);
+
+		DrawCenteredText(TEXT("SPIN TO WIN"), CX, MessageY, FLinearColor::Yellow, 2.8f);
+		DrawCenteredText(TEXT("Choose how to play"), CX, MessageY + 58.f, DimColor, 1.2f);
+
 		if (GM->Prompts.IsValidIndex(1))
 		{
-			DrawCenteredText(FString::Printf(TEXT("%s  -  TUTORIAL"), *GM->Prompts[0].Hint), CX, BottomY - 40.f, GM->Prompts[0].Color, 1.5f);
-			DrawCenteredText(FString::Printf(TEXT("%s  -  ENDLESS (skip the tutorial)"), *GM->Prompts[1].Hint), CX, BottomY, GM->Prompts[1].Color, 1.5f);
+			const FSpinPrompt& First = GM->Prompts[0];
+			const FSpinPrompt& Second = GM->Prompts[1];
+
+			const float CardW = FMath::Min(W * 0.32f, 320.f);
+			const float CardH = 130.f;
+			const float Gap = 50.f;
+			const float CardY = CY - CardH * 0.5f + 30.f;
+			const float LeftX = CX - Gap * 0.5f - CardW;
+			const float RightX = CX + Gap * 0.5f;
+
+			DrawRect(FLinearColor(0.05f, 0.05f, 0.08f, 0.92f), LeftX, CardY, CardW, CardH);
+			DrawCenteredText(TEXT("TUTORIAL"), LeftX + CardW * 0.5f, CardY + 20.f, FLinearColor::White, 1.7f);
+			DrawCenteredText(TEXT("Learn the ropes - 7 short levels"), LeftX + CardW * 0.5f, CardY + 58.f, DimColor, 1.0f);
+			DrawCenteredText(FString::Printf(TEXT("Press %s"), *First.Hint), LeftX + CardW * 0.5f, CardY + 92.f, First.Color, 1.4f);
+
+			DrawRect(FLinearColor(0.05f, 0.05f, 0.08f, 0.92f), RightX, CardY, CardW, CardH);
+			DrawCenteredText(TEXT("ENDLESS"), RightX + CardW * 0.5f, CardY + 20.f, FLinearColor::White, 1.7f);
+			DrawCenteredText(TEXT("Skip straight to the real run"), RightX + CardW * 0.5f, CardY + 58.f, DimColor, 1.0f);
+			DrawCenteredText(FString::Printf(TEXT("Press %s"), *Second.Hint), RightX + CardW * 0.5f, CardY + 92.f, Second.Color, 1.4f);
 		}
 	}
 	else if (GM->State == ESpinState::GameOver)
@@ -112,6 +156,10 @@ void ASpinHUD::DrawHUD()
 		if (GM->bOutOfLives)
 		{
 			DrawCenteredText(TEXT("Out of lives!"), CX, MessageY + 90.f, FLinearColor::Red, 1.2f);
+		}
+		else if (GM->bOutOfMissLives)
+		{
+			DrawCenteredText(TEXT("Missed too many zones!"), CX, MessageY + 90.f, FLinearColor::Red, 1.2f);
 		}
 		else if (GM->bHandBroke)
 		{
@@ -170,8 +218,8 @@ void ASpinHUD::DrawHUD()
 			}
 		}
 
-		// Tutorial messages ("Try again!").
-		if (bTutorial && GM->IsShowingNotice())
+		// Notices: "Try again!" in the tutorial, "Missed it!" in Endless.
+		if (GM->IsShowingNotice())
 		{
 			DrawCenteredText(GM->NoticeText, CX, MessageY, NoticeColor, 1.3f);
 		}

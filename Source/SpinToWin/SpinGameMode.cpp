@@ -64,7 +64,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.IntroLines.Add(TEXT("Same thing, a little quicker, with smaller zones."));
 		L.Instruction = FString::Printf(TEXT("Press %s when the hand is inside the green zone"), *First);
 		L.Confirm = ETutorialConfirm::FirstButton;
-		L.Hits = 15;
+		L.Hits = 10;
 		L.Speed = 85.f;
 		L.ZoneHalfWidth = 38.f;
 		L.NumButtons = 1;
@@ -81,7 +81,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.IntroLines.Add(TEXT("The zones are big again while you get used to it."));
 		L.Instruction = FString::Printf(TEXT("Green zone: %s     Blue zone: %s"), *First, *Second);
 		L.Confirm = ETutorialConfirm::SecondButton;
-		L.Hits = 15;
+		L.Hits = 10;
 		L.Speed = 85.f;
 		L.ZoneHalfWidth = 45.f;
 		L.NumButtons = 2;
@@ -96,7 +96,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.IntroLines.Add(TEXT("Both buttons again, a little faster, with smaller zones."));
 		L.Instruction = FString::Printf(TEXT("Green zone: %s     Blue zone: %s"), *First, *Second);
 		L.Confirm = ETutorialConfirm::FirstButton;
-		L.Hits = 15;
+		L.Hits = 10;
 		L.Speed = 100.f;
 		L.ZoneHalfWidth = 38.f;
 		L.NumButtons = 2;
@@ -113,7 +113,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.IntroLines.Add(FString::Printf(TEXT("You get %d lives in a real run, and hopping a post earns one back."), MaxLives));
 		L.Instruction = TEXT("Hold LEFT CLICK / R2 to raise the hand over posts");
 		L.Confirm = ETutorialConfirm::Lift;
-		L.Hits = 15;
+		L.Hits = 10;
 		L.Speed = 100.f;
 		L.ZoneHalfWidth = 38.f;
 		L.NumButtons = 1;
@@ -130,7 +130,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.IntroLines.Add(TEXT("Use both buttons and hop the posts at the same time."));
 		L.Instruction = FString::Printf(TEXT("Green: %s   Blue: %s   Raise: LEFT CLICK / R2"), *First, *Second);
 		L.Confirm = ETutorialConfirm::SecondButton;
-		L.Hits = 15;
+		L.Hits = 10;
 		L.Speed = 100.f;
 		L.ZoneHalfWidth = 38.f;
 		L.NumButtons = 2;
@@ -150,7 +150,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.IntroLines.Add(TEXT("In a real run you get 3 seconds, or the hand breaks and it is game over."));
 		L.Instruction = FString::Printf(TEXT("If the hand jams, press %s again and again"), *First);
 		L.Confirm = ETutorialConfirm::FirstButton;
-		L.Hits = 15;
+		L.Hits = 10;
 		L.Speed = 100.f;
 		L.ZoneHalfWidth = 38.f;
 		L.NumButtons = 2;
@@ -282,7 +282,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		}
 		else
 		{
-			EndGame();
+			OnZoneMissed();
 			return;
 		}
 	}
@@ -561,6 +561,9 @@ void ASpinGameMode::StartGame()
 	LifeLostTime = -1000.f;
 	LifeGainedTime = -1000.f;
 	bOutOfLives = false;
+	MissLives = MaxMissLives;
+	MissLifeLostTime = -1000.f;
+	bOutOfMissLives = false;
 	bHandBroke = false;
 	bHandWasInZone = false;
 	bZoneTainted = false;
@@ -626,6 +629,28 @@ void ASpinGameMode::OnHit()
 		State = ESpinState::ObstacleIntro;
 		Shake(LevelUpShake);
 	}
+}
+
+void ASpinGameMode::OnZoneMissed()
+{
+	// Non-regenerating: unlike the obstacle lives, there's no way to earn these back.
+	MissLives = FMath::Max(0, MissLives - 1);
+	Shake(LifeLostShake);
+	if (GetWorld())
+	{
+		MissLifeLostTime = GetWorld()->GetTimeSeconds();
+	}
+	bHandWasInZone = false;
+
+	if (MissLives <= 0)
+	{
+		bOutOfMissLives = true;
+		EndGame();
+		return;
+	}
+
+	// The zone stays exactly where it is and the hand keeps going, same as a tutorial miss.
+	ShowNotice(TEXT("Missed it!"));
 }
 
 void ASpinGameMode::ResumeAfterIntro()

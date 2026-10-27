@@ -104,20 +104,20 @@ public:
 
 	/** Radius of the dial in world units. Everything else scales from this. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
-	float DialRadius = 300.f;
+	float DialRadius = 600.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
-	float DialThickness = 10.f;
+	float DialThickness = 20.f;
 
 	/** Hand length as a fraction of the dial radius. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
 	float HandLengthFraction = 0.9f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
-	float HandWidth = 14.f;
+	float HandWidth = 28.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
-	float HandHeight = 6.f;
+	float HandHeight = 12.f;
 
 	/** Where the target zone sits, as a fraction of the dial radius (centre of the band). */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
@@ -127,32 +127,50 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
 	float ZoneThicknessFraction = 0.2f;
 
+	// ---------------- Neon ring highlights ----------------
+
+	/** Outer ring sits just inside the dial's edge and always shows the currently-needed button's
+	 *  colour (same colour as the target zone), so the whole rim reads as a glowing accent. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	float OuterRingRadiusFraction = 0.99f;
+
+	/** Inner ring frames the hub with a fixed accent colour. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	float InnerRingRadiusFraction = 0.16f;
+
+	/** Thickness of both rings, as a fraction of the dial radius. Kept small for a thin glowing line. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	float RingThicknessFraction = 0.012f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	FLinearColor InnerRingColor = FLinearColor(0.1f, 0.9f, 1.f);
+
 	// ---------------- Lift tuning ----------------
 
 	/** How high the hand rises while the lift button is held (world units). Must be above ObstacleHeight. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
-	float MaxHandLift = 75.f;
+	float MaxHandLift = 150.f;
 
 	/** Rise speed, world units per second. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
-	float LiftRiseSpeed = 700.f;
+	float LiftRiseSpeed = 1400.f;
 
 	/** Lowering speed, world units per second. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
-	float LiftLowerSpeed = 500.f;
+	float LiftLowerSpeed = 1000.f;
 
 	/** Above this height the hand counts as "raised" (only changes its colour). */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
-	float RaisedThreshold = 20.f;
+	float RaisedThreshold = 40.f;
 
 	// ---------------- Obstacle tuning ----------------
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
-	float ObstacleRadius = 36.f;
+	float ObstacleRadius = 72.f;
 
 	/** The hand clears an obstacle once it is lifted at least this high. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
-	float ObstacleHeight = 45.f;
+	float ObstacleHeight = 90.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
 	float ObstacleSlideInTime = 0.4f;
@@ -164,18 +182,18 @@ public:
 
 	/** Camera distance from the dial centre, as a multiple of the dial radius. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
-	float CameraDistanceFactor = 3.2f;
+	float CameraDistanceFactor = 8.0f;
 
 	/** Degrees the camera looks down. 90 = straight top-down, lower = more side-on. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
-	float CameraPitch = 55.f;
+	float CameraPitch = 42.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
-	float CameraFOV = 60.f;
+	float CameraFOV = 68.f;
 
 	/** Biggest camera offset (world units) at full shake intensity. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
-	float MaxShakeOffset = 18.f;
+	float MaxShakeOffset = 91.f;
 
 	/** How fast a shake dies down (intensity units per second). */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
@@ -183,7 +201,7 @@ public:
 
 	/** Brightness of the light over the dial. Lower it if the scene looks washed out. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
-	float FillLightIntensity = 30000.f;
+	float FillLightIntensity = 400000.f;
 
 	// ---------------- State ----------------
 
@@ -203,6 +221,7 @@ private:
 	static constexpr int32 NumZoneSegments = 48;
 	static constexpr int32 NumObstacleSlots = 4;
 	static constexpr int32 NumSparks = 40;
+	static constexpr int32 NumRingSegments = 90;
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
@@ -226,6 +245,12 @@ private:
 	TArray<TObjectPtr<UStaticMeshComponent>> ZoneSegments;
 
 	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> OuterRingSegments;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> InnerRingSegments;
+
+	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleMeshes;
 
 	UPROPERTY()
@@ -243,8 +268,18 @@ private:
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> BaseMaterial;
 
+	/** Emissive neon material shared with the city's level dressing, used for the ring highlights. */
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> NeonMaterial;
+
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> ZoneMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> OuterRingMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> InnerRingMID;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> HandMID;

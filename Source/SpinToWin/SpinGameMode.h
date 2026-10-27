@@ -231,12 +231,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
 	float ObstacleClearGap = 25.f;
 
-	/** Obstacles sit between these fractions of the dial radius. */
+	/** Obstacles sit between these fractions of the dial radius. Kept close to the rim and away
+	 *  from the centre pillar; the upper bound is capped so the obstacle mesh doesn't poke past the rim. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
-	float ObstacleMinRadiusFraction = 0.4f;
+	float ObstacleMinRadiusFraction = 0.78f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
-	float ObstacleMaxRadiusFraction = 0.75f;
+	float ObstacleMaxRadiusFraction = 0.88f;
 
 	/** Lives the player starts a run with. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
@@ -245,6 +246,13 @@ public:
 	/** Camera shake when a life is lost. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
 	float LifeLostShake = 0.35f;
+
+	// ---------------- Misses (Endless) ----------------
+
+	/** Separate, non-regenerating lives for missed target zones. Endless only - the tutorial can
+	 *  never be failed. Once these run out, the next miss ends the run. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Misses", meta = (ClampMin = "1"))
+	int32 MaxMissLives = 3;
 
 	// ---------------- Tuning (Endless) ----------------
 
@@ -354,6 +362,18 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bOutOfLives = false;
 
+	/** Miss lives left this run (Endless only). These never regenerate. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 MissLives = 3;
+
+	/** World time of the last missed zone, used for HUD feedback. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float MissLifeLostTime = -1000.f;
+
+	/** True if the run ended because the player missed too many target zones. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bOutOfMissLives = false;
+
 	/** True if the run ended because a jam was not fixed in time. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bHandBroke = false;
@@ -427,6 +447,7 @@ private:
 	// Endless
 	void StartGame();
 	void OnHit();
+	void OnZoneMissed();
 	void EndGame();
 	void ResumeAfterIntro();
 	void LoseLife();

@@ -29,10 +29,13 @@ ASpinClock::ASpinClock()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderFinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	// Emissive neon material from the level's city dressing, used only for the thin ring highlights.
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> NeonMaterialFinder(TEXT("/Game/Materials/Neon/M_Neon.M_Neon"));
 
 	UStaticMesh* CylinderMesh = CylinderFinder.Succeeded() ? CylinderFinder.Object : nullptr;
 	UStaticMesh* CubeMesh = CubeFinder.Succeeded() ? CubeFinder.Object : nullptr;
 	BaseMaterial = MaterialFinder.Succeeded() ? MaterialFinder.Object : nullptr;
+	NeonMaterial = NeonMaterialFinder.Succeeded() ? NeonMaterialFinder.Object : nullptr;
 
 	auto MakeMesh = [this](FName Name, UStaticMesh* Mesh, USceneComponent* Parent) -> UStaticMeshComponent*
 	{
@@ -64,6 +67,20 @@ ASpinClock::ASpinClock()
 		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("ZoneSegment%d"), i), CubeMesh, Root);
 		Segment->SetCastShadow(false);
 		ZoneSegments.Add(Segment);
+	}
+
+	for (int32 i = 0; i < NumRingSegments; ++i)
+	{
+		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("OuterRing%d"), i), CubeMesh, Root);
+		Segment->SetCastShadow(false);
+		OuterRingSegments.Add(Segment);
+	}
+
+	for (int32 i = 0; i < NumRingSegments; ++i)
+	{
+		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("InnerRing%d"), i), CubeMesh, Root);
+		Segment->SetCastShadow(false);
+		InnerRingSegments.Add(Segment);
 	}
 
 	for (int32 i = 0; i < NumObstacleSlots; ++i)
@@ -181,6 +198,42 @@ void ASpinClock::BuildVisuals()
 		{
 			Post->SetMaterial(0, ObstacleMID);
 		}
+	}
+
+	// Thin neon ring highlights: built the same way as the zone band (a ring of small blocks),
+	// but as a full 360-degree circle that never moves - only its colour changes.
+	if (NeonMaterial)
+	{
+		auto BuildRing = [this](TArray<TObjectPtr<UStaticMeshComponent>>& Segments, float RadiusFraction, UMaterialInstanceDynamic* MID)
+		{
+			const int32 Count = Segments.Num();
+			const float Rho = DialRadius * RadiusFraction;
+			const float StepDeg = 360.f / Count;
+			const float TangentLength = FMath::DegreesToRadians(StepDeg) * Rho * 1.15f;
+			const float RadialLength = DialRadius * RingThicknessFraction;
+
+			for (int32 i = 0; i < Count; ++i)
+			{
+				const float AngleDeg = (i + 0.5f) * StepDeg;
+				const float Rad = FMath::DegreesToRadians(AngleDeg);
+
+				UStaticMeshComponent* Segment = Segments[i];
+				Segment->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 2.f));
+				Segment->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
+				Segment->SetRelativeScale3D(FVector(RadialLength / 100.f, TangentLength / 100.f, 2.5f / 100.f));
+				Segment->SetMaterial(0, MID);
+			}
+		};
+
+		OuterRingMID = UMaterialInstanceDynamic::Create(NeonMaterial, this);
+		BuildRing(OuterRingSegments, OuterRingRadiusFraction, OuterRingMID);
+
+		InnerRingMID = UMaterialInstanceDynamic::Create(NeonMaterial, this);
+		if (InnerRingMID)
+		{
+			InnerRingMID->SetVectorParameterValue(ColorParam, InnerRingColor);
+		}
+		BuildRing(InnerRingSegments, InnerRingRadiusFraction, InnerRingMID);
 	}
 
 	// Camera: fixed, looking down at the dial from the "6 o'clock" side.
@@ -375,6 +428,12 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	if (ZoneMID)
 	{
 		ZoneMID->SetVectorParameterValue(ColorParam, ZoneColor);
+	}
+
+	if (OuterRingMID)
+	{
+		// The whole rim glows the colour of whichever button the next zone needs.
+		OuterRingMID->SetVectorParameterValue(ColorParam, ZoneBase);
 	}
 
 	if (HandMID)
