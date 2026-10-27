@@ -38,3 +38,11 @@ Content/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# AI tool configs (not part of the project)
+.codex/
+.cursor/
+.gemini/
+.roo/
+.ignore
+mcp.json
