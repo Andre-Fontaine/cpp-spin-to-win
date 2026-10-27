@@ -2,21 +2,35 @@
 
 A simple reflex game built with Unreal Engine 5.8 and C++.
 
-A clock-style hand sweeps around a dial. Press the button while the hand is inside the green zone and it reverses direction, speeds up, and a new, slightly smaller zone appears. Miss the zone, or press too early, and the run is over. How long can you last?
+A clock-style hand sweeps around a dial. Press the right button while the hand is inside the target zone and it reverses direction, speeds up, and a new, slightly smaller zone appears. Every mistake - missing a zone, pressing the wrong button, running into an obstacle, or failing to fix a jam in time - costs a life and pauses the run so you can confirm and get a few seconds of invincibility to settle back in. Run out of lives and it's back to the title screen. How far can you get?
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| WASD / Left Click/Right Trigger / Gamepad ABXY | Start, hit the zone, restart after game over |
+| W / Gamepad A (Xbox) or X (PlayStation) | Hit the first zone, confirm menus/prompts |
+| D / Gamepad B (Xbox) or O (PlayStation) | Hit the second zone (unlocks later), confirm menus/prompts |
+| Hold Left Click / Right Trigger | Raise the hand over an obstacle |
+| Mouse | Click buttons on the main menu, mode select, settings, and pause screens |
+
+## Modes
+
+- **Tutorial** - 7 short, unfailable levels that introduce the zone, the second button, obstacles/the lift, and jams one at a time.
+- **Endless** - the real run. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life and pause the run rather than ending it outright - the run only ends when you're out of lives.
 
 ## Status
 
 Early prototype.
 
 - [x] Core loop: spinning hand, target zone, increasing speed, game over
-- [ ] Saved local leaderboard
 - [x] Extra buttons / prompts that unlock as you progress
+- [x] Obstacles, the lift, and a regenerating life pool
+- [x] Jams that need mashing to fix before the hand breaks
+- [x] Non-regenerating "miss" lives for missed/mistimed zones, separate from obstacle lives
+- [x] Mistake recovery: pause, confirm, then a few seconds of invincibility instead of an instant game over
+- [x] Tutorial mode
+- [x] Main menu (Play / Settings), mode select, and a settings screen (quality, resolution, volume)
+- [ ] Saved local leaderboard
 - [ ] Online leaderboard
 
 ## About this repo
@@ -27,11 +41,13 @@ This repository contains the **C++ source and project config only**. The `Conten
 
 | File | Purpose |
 |---|---|
-| `SpinGameMode` | Game rules: hand movement, scoring, speed ramp, zone placement, game states |
-| `SpinPlayerController` | Reads input and forwards it to the game mode |
-| `SpinHUD` | Draws the dial, hand, target zone and text |
+| `SpinGameMode` | Game rules: hand movement, scoring, speed ramp, zone placement, lives/jams, game states, menus and settings |
+| `SpinPlayerController` | Reads input (keyboard/gamepad/mouse) and forwards it to the game mode |
+| `SpinHUD` | Draws the dial overlay, menus, pause screens and text |
+| `SpinClock` | The in-world dial actor: hand, zone, and obstacle meshes |
+| `SpinCityFX` | Purely cosmetic ambient effects (floor grid, circuit traces, flickering nodes) driven by level-placed dressing |
 
-Difficulty values (start speed, max speed, zone size, and so on) are `UPROPERTY` fields on `SpinGameMode`.
+Difficulty values (start speed, max speed, zone size, lives, jam timing, and so on) are `UPROPERTY` fields on `SpinGameMode`.
 
 ## Building
 

@@ -4,7 +4,10 @@
 #include "SpinPlayerController.h"
 #include "SpinHUD.h"
 #include "SpinClock.h"
+#include "AudioDevice.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/GameUserSettings.h"
 #include "GameFramework/PlayerController.h"
 
 ASpinGameMode::ASpinGameMode()
@@ -222,9 +225,9 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	// Clamp so a frame hitch can't make the hand skip over the zone.
 	const float Dt = FMath::Min(DeltaSeconds, 0.05f);
 
-	if (State == ESpinState::WaitingToStart)
+	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu)
 	{
-		// Slow idle spin on the title screen.
+		// Slow idle spin behind the menus.
 		HandAngle = FMath::Fmod(HandAngle + StartSpeed * 0.5f * Dt, 360.f);
 		return;
 	}
@@ -235,6 +238,23 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	}
 
 	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * Dt + 360.f, 360.f);
+
+	// Invincibility window after resuming from a life-lost pause: the hand keeps moving, but
+	// nothing can go wrong (and nothing can be hit) until the timer runs out.
+	if (bInvincible)
+	{
+		InvincibleTimeRemaining -= Dt;
+		if (InvincibleTimeRemaining <= 0.f)
+		{
+			bInvincible = false;
+			InvincibleTimeRemaining = 0.f;
+			bHandWasInZone = false;
+		}
+		else
+		{
+			return;
+		}
+	}
 
 	UpdateJam(Dt);
 	if (State != ESpinState::Playing)
@@ -263,7 +283,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		}
 		else
 		{
-			EndGame(); // ran into an obstacle without lifting the hand over it
+			FailAndPause(ESpinMistake::HitObstacle); // ran into an obstacle without lifting the hand over it
 			return;
 		}
 	}
@@ -298,6 +318,19 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 	switch (State)
 	{
 	case ESpinState::WaitingToStart:
+		// First button: Play (mode select). Second button: Settings. Mirrors the PLAY / SETTINGS
+		// menu cards so keyboard and gamepad reach the same places mouse clicks do.
+		if (ButtonIndex == 0)
+		{
+			OpenModeSelect();
+		}
+		else
+		{
+			OpenSettings();
+		}
+		break;
+
+	case ESpinState::ModeSelect:
 		// First button: tutorial. Second button: straight into Endless.
 		if (ButtonIndex == 0)
 		{
@@ -309,7 +342,25 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		}
 		break;
 
+	case ESpinState::SettingsMenu:
+		// No keyboard shortcuts here - mouse only for now.
+		break;
+
+	case ESpinState::MissPause:
+		if (ButtonIndex == 0)
+		{
+			ResumeAfterMiss();
+		}
+		break;
+
 	case ESpinState::Playing:
+		// Invincibility window after resuming from a life-lost pause: nothing can be hit and
+		// nothing can go wrong, so presses are completely ignored until the timer runs out.
+		if (bInvincible)
+		{
+			break;
+		}
+
 		// A jammed hand only listens to the first button, which mashes it free.
 		if (JamPhase == EJamPhase::Jammed)
 		{
@@ -338,7 +389,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		}
 		else
 		{
-			EndGame(); // too early, or the wrong button
+			FailAndPause(ESpinMistake::WrongButton); // too early, or the wrong button
 		}
 		break;
 
@@ -419,9 +470,10 @@ void ASpinGameMode::SetLiftHeld(bool bHeld)
 	}
 
 	// A press only counts as a lift if an obstacle is out. Reaching for the lift with nothing to
-	// hop over costs a life in Endless, and shows a message in the tutorial.
+	// hop over costs a life in Endless, and shows a message in the tutorial. Invincibility blocks
+	// the penalty just like every other mistake.
 	bool bValidPress = false;
-	if (bHeld && State == ESpinState::Playing && JamPhase != EJamPhase::Jammed && ObstaclesEnabled())
+	if (bHeld && State == ESpinState::Playing && JamPhase != EJamPhase::Jammed && ObstaclesEnabled() && !bInvincible)
 	{
 		bValidPress = Clock && Clock->IsLiftAvailable();
 		if (!bValidPress)
@@ -564,6 +616,11 @@ void ASpinGameMode::StartGame()
 	MissLives = MaxMissLives;
 	MissLifeLostTime = -1000.f;
 	bOutOfMissLives = false;
+	// A few seconds of invincibility (with the big countdown) to get oriented before anything can
+	// go wrong, same as resuming after a mistake.
+	bInvincible = true;
+	InvincibleTimeRemaining = InvincibilityDuration;
+	LastMistake = ESpinMistake::None;
 	bHandBroke = false;
 	bHandWasInZone = false;
 	bZoneTainted = false;
@@ -633,24 +690,76 @@ void ASpinGameMode::OnHit()
 
 void ASpinGameMode::OnZoneMissed()
 {
-	// Non-regenerating: unlike the obstacle lives, there's no way to earn these back.
-	MissLives = FMath::Max(0, MissLives - 1);
+	FailAndPause(ESpinMistake::MissedZone);
+}
+
+void ASpinGameMode::FailAndPause(ESpinMistake Mistake)
+{
+	LastMistake = Mistake;
 	Shake(LifeLostShake);
-	if (GetWorld())
-	{
-		MissLifeLostTime = GetWorld()->GetTimeSeconds();
-	}
 	bHandWasInZone = false;
 
-	if (MissLives <= 0)
+	// Obstacle hits spend the regenerating "Lives" pool; everything else spends the
+	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise the
+	// player just sees a pause screen and confirms to continue at their current level/score.
+	if (Mistake == ESpinMistake::HitObstacle)
 	{
-		bOutOfMissLives = true;
-		EndGame();
-		return;
+		Lives = FMath::Max(0, Lives - 1);
+		if (GetWorld())
+		{
+			LifeLostTime = GetWorld()->GetTimeSeconds();
+		}
+
+		if (Lives <= 0)
+		{
+			bOutOfLives = true;
+			EndGame();
+			return;
+		}
+	}
+	else
+	{
+		MissLives = FMath::Max(0, MissLives - 1);
+		if (GetWorld())
+		{
+			MissLifeLostTime = GetWorld()->GetTimeSeconds();
+		}
+
+		if (MissLives <= 0)
+		{
+			bOutOfMissLives = true;
+			if (Mistake == ESpinMistake::HandBroke)
+			{
+				bHandBroke = true;
+			}
+			EndGame();
+			return;
+		}
+
+		// The jam that broke the hand is fixed as part of the pause - the player is not left
+		// looking at a still-jammed hand once they continue.
+		if (Mistake == ESpinMistake::HandBroke)
+		{
+			ResetJam();
+		}
 	}
 
-	// The zone stays exactly where it is and the hand keeps going, same as a tutorial miss.
-	ShowNotice(TEXT("Missed it!"));
+	// Pause: the player sees they lost a life and confirms before the hand moves again.
+	State = ESpinState::MissPause;
+}
+
+void ASpinGameMode::ResumeAfterMiss()
+{
+	State = ESpinState::Playing;
+	bInvincible = true;
+	InvincibleTimeRemaining = InvincibilityDuration;
+	bHandWasInZone = false;
+
+	// A clean slate to get re-oriented: nothing left over to dodge.
+	if (Clock)
+	{
+		Clock->RetireObstacles();
+	}
 }
 
 void ASpinGameMode::ResumeAfterIntro()
@@ -861,6 +970,182 @@ void ASpinGameMode::ReturnToTitle()
 }
 
 // ---------------------------------------------------------------------------------------------
+// Menus
+// ---------------------------------------------------------------------------------------------
+
+void ASpinGameMode::OpenModeSelect()
+{
+	State = ESpinState::ModeSelect;
+}
+
+void ASpinGameMode::OpenSettings()
+{
+	InitSettingsFromCurrent();
+	State = ESpinState::SettingsMenu;
+}
+
+void ASpinGameMode::CloseMenus()
+{
+	State = ESpinState::WaitingToStart;
+}
+
+void ASpinGameMode::HandleMenuAction(EMenuAction Action)
+{
+	switch (Action)
+	{
+	case EMenuAction::Play:
+		if (State == ESpinState::WaitingToStart)
+		{
+			OpenModeSelect();
+		}
+		break;
+
+	case EMenuAction::OpenSettings:
+		if (State == ESpinState::WaitingToStart)
+		{
+			OpenSettings();
+		}
+		break;
+
+	case EMenuAction::Back:
+		if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu)
+		{
+			CloseMenus();
+		}
+		break;
+
+	case EMenuAction::StartTutorial:
+		if (State == ESpinState::ModeSelect)
+		{
+			StartTutorial();
+		}
+		break;
+
+	case EMenuAction::StartEndless:
+		if (State == ESpinState::ModeSelect)
+		{
+			StartGame();
+		}
+		break;
+
+	case EMenuAction::QualityPrev:
+		QualityIndex = (QualityIndex + 3) % 4;
+		ApplyQuality();
+		break;
+
+	case EMenuAction::QualityNext:
+		QualityIndex = (QualityIndex + 1) % 4;
+		ApplyQuality();
+		break;
+
+	case EMenuAction::ResolutionPrev:
+		ResolutionIndex = (ResolutionIndex + 3) % 4;
+		ApplyResolution();
+		break;
+
+	case EMenuAction::ResolutionNext:
+		ResolutionIndex = (ResolutionIndex + 1) % 4;
+		ApplyResolution();
+		break;
+
+	case EMenuAction::VolumeDown:
+		VolumePercent = FMath::Clamp(VolumePercent - 10, 0, 100);
+		ApplyVolume();
+		break;
+
+	case EMenuAction::VolumeUp:
+		VolumePercent = FMath::Clamp(VolumePercent + 10, 0, 100);
+		ApplyVolume();
+		break;
+
+	case EMenuAction::ContinueAfterMiss:
+		if (State == ESpinState::MissPause)
+		{
+			ResumeAfterMiss();
+		}
+		break;
+
+	default:
+		break;
+	}
+}
+
+namespace
+{
+	// Shared by ApplyResolution / InitSettingsFromCurrent / GetResolutionLabel so they can't drift apart.
+	const FIntPoint ResolutionPresets[] = { {1280, 720}, {1600, 900}, {1920, 1080}, {2560, 1440} };
+	const TCHAR* QualityLabels[] = { TEXT("LOW"), TEXT("MEDIUM"), TEXT("HIGH"), TEXT("EPIC") };
+}
+
+void ASpinGameMode::InitSettingsFromCurrent()
+{
+	const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+	if (!Settings)
+	{
+		return;
+	}
+
+	QualityIndex = FMath::Clamp(Settings->GetOverallScalabilityLevel(), 0, 3);
+
+	// Match the current resolution to whichever preset is closest, so the label isn't a lie.
+	const FIntPoint CurrentRes = Settings->GetScreenResolution();
+	int32 BestIndex = ResolutionIndex;
+	int32 BestDist = TNumericLimits<int32>::Max();
+	for (int32 i = 0; i < UE_ARRAY_COUNT(ResolutionPresets); ++i)
+	{
+		const int32 Dist = FMath::Abs(ResolutionPresets[i].X - CurrentRes.X) + FMath::Abs(ResolutionPresets[i].Y - CurrentRes.Y);
+		if (Dist < BestDist)
+		{
+			BestDist = Dist;
+			BestIndex = i;
+		}
+	}
+	ResolutionIndex = BestIndex;
+}
+
+void ASpinGameMode::ApplyQuality()
+{
+	if (UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr)
+	{
+		Settings->SetOverallScalabilityLevel(QualityIndex);
+		Settings->ApplySettings(false);
+		Settings->SaveSettings();
+	}
+}
+
+void ASpinGameMode::ApplyResolution()
+{
+	if (UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr)
+	{
+		Settings->SetScreenResolution(ResolutionPresets[FMath::Clamp(ResolutionIndex, 0, (int32)UE_ARRAY_COUNT(ResolutionPresets) - 1)]);
+		Settings->ApplySettings(false);
+		Settings->SaveSettings();
+	}
+}
+
+void ASpinGameMode::ApplyVolume()
+{
+	if (UWorld* World = GetWorld())
+	{
+		if (FAudioDeviceHandle AudioDevice = World->GetAudioDevice())
+		{
+			AudioDevice->SetTransientPrimaryVolume(VolumePercent / 100.f);
+		}
+	}
+}
+
+FString ASpinGameMode::GetQualityLabel() const
+{
+	return QualityLabels[FMath::Clamp(QualityIndex, 0, (int32)UE_ARRAY_COUNT(QualityLabels) - 1)];
+}
+
+FString ASpinGameMode::GetResolutionLabel() const
+{
+	const FIntPoint& Res = ResolutionPresets[FMath::Clamp(ResolutionIndex, 0, (int32)UE_ARRAY_COUNT(ResolutionPresets) - 1)];
+	return FString::Printf(TEXT("%d x %d"), Res.X, Res.Y);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Jam
 // ---------------------------------------------------------------------------------------------
 
@@ -925,8 +1210,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 		}
 		else
 		{
-			bHandBroke = true;
-			EndGame();
+			FailAndPause(ESpinMistake::HandBroke);
 		}
 	}
 }

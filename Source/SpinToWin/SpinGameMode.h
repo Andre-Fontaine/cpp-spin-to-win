@@ -11,17 +11,60 @@ class ASpinClock;
 UENUM(BlueprintType)
 enum class ESpinState : uint8
 {
+	/** Main menu: PLAY / SETTINGS. */
 	WaitingToStart,
+	/** PLAY was chosen: pick TUTORIAL or ENDLESS. */
+	ModeSelect,
+	/** SETTINGS was chosen: graphics quality, resolution, and volume. */
+	SettingsMenu,
 	Playing,
 	GameOver,
 	/** Endless: paused on the "new button unlocked" screen until the player presses the new button. */
 	NewButtonIntro,
 	/** Endless: paused on the "obstacles" screen until the player holds the lift button. */
 	ObstacleIntro,
+	/** Endless: paused after any life-costing mistake (missed zone, wrong button, obstacle hit,
+	 *  or a jam that broke the hand), until the player confirms to continue. */
+	MissPause,
 	/** Tutorial: paused on a level's explanation screen until the player presses its confirm button. */
 	TutorialIntro,
 	/** Tutorial finished. */
 	TutorialComplete
+};
+
+/** What kind of mistake triggered the life-lost pause screen (ESpinState::MissPause), purely so
+ *  the HUD can show the right message and the right life pool. */
+UENUM(BlueprintType)
+enum class ESpinMistake : uint8
+{
+	None,
+	/** The hand left the target zone without a press. */
+	MissedZone,
+	/** A button was pressed too early, or the wrong one. */
+	WrongButton,
+	/** The hand touched an obstacle without being lifted over it. */
+	HitObstacle,
+	/** A jam was not fixed before the hand broke. */
+	HandBroke
+};
+
+/** An action a HUD menu button can trigger when clicked (or confirmed by keyboard/gamepad). */
+UENUM(BlueprintType)
+enum class EMenuAction : uint8
+{
+	None,
+	Play,
+	OpenSettings,
+	Back,
+	StartTutorial,
+	StartEndless,
+	QualityPrev,
+	QualityNext,
+	ResolutionPrev,
+	ResolutionNext,
+	VolumeDown,
+	VolumeUp,
+	ContinueAfterMiss,
 };
 
 UENUM(BlueprintType)
@@ -154,6 +197,12 @@ public:
 	/** Called by the clock when the hand has hopped over an obstacle: gives a life back. */
 	void OnObstacleCleared();
 
+	/** Called by the player controller for a clicked (or keyboard-confirmed) menu button. */
+	void HandleMenuAction(EMenuAction Action);
+
+	FString GetQualityLabel() const;
+	FString GetResolutionLabel() const;
+
 	// ---------------- Tutorial ----------------
 
 	/** The tutorial levels, built in BuildTutorialLevels(). */
@@ -258,7 +307,7 @@ public:
 
 	/** Hand speed at the start of a run, in degrees per second. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float StartSpeed = 100.f;
+	float StartSpeed = 85.f;
 
 	/** Hand speed will never exceed this. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -266,7 +315,7 @@ public:
 
 	/** Speed is multiplied by this after every successful hit. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float SpeedMultiplier = 1.025f;
+	float SpeedMultiplier = 1.012f;
 
 	/** Half-width of the target zone at the start, in degrees. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -278,7 +327,7 @@ public:
 
 	/** How much the zone half-width shrinks after each hit. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float ZoneShrinkPerHit = 0.35f;
+	float ZoneShrinkPerHit = 0.18f;
 
 	/** Next zone appears at least this many degrees ahead of the hand. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -291,6 +340,11 @@ public:
 	/** Seconds after game over before a button press restarts (avoids accidental restarts). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float RestartDelay = 0.6f;
+
+	/** Seconds of invincibility after confirming a life-lost pause screen - obstacles, zone
+	 *  misses, jams, and button presses are all ignored until this runs out. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
+	float InvincibilityDuration = 5.f;
 
 	// ---------------- Feel (camera shake strength, 0..1) ----------------
 
@@ -374,6 +428,20 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bOutOfMissLives = false;
 
+	/** True during the invincibility window after confirming a life-lost pause screen (see
+	 *  InvincibilityDuration): zones, obstacles, jams, and button presses are all ignored, giving
+	 *  the player a few seconds to get re-oriented with the hand before play resumes for real. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bInvincible = false;
+
+	/** Seconds left in the current invincibility window (see bInvincible). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float InvincibleTimeRemaining = 0.f;
+
+	/** Which kind of mistake caused the current (or most recent) life-lost pause screen. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	ESpinMistake LastMistake = ESpinMistake::None;
+
 	/** True if the run ended because a jam was not fixed in time. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bHandBroke = false;
@@ -403,6 +471,21 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float NoticeTime = -1000.f;
+
+	// ---------------- Settings (read by the HUD's Settings screen) ----------------
+
+	/** 0=Low, 1=Medium, 2=High, 3=Epic. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
+	int32 QualityIndex = 2;
+
+	/** Index into a fixed list of common resolutions. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
+	int32 ResolutionIndex = 2;
+
+	/** Master volume, 0-100. Applies immediately but isn't saved between sessions - there's no
+	 *  audio content in the project yet for a saved value to matter to. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
+	int32 VolumePercent = 100;
 
 	bool IsTutorial() const;
 
@@ -448,9 +531,20 @@ private:
 	void StartGame();
 	void OnHit();
 	void OnZoneMissed();
+	void FailAndPause(ESpinMistake Mistake);
+	void ResumeAfterMiss();
 	void EndGame();
 	void ResumeAfterIntro();
 	void LoseLife();
+
+	// Menus
+	void OpenModeSelect();
+	void OpenSettings();
+	void CloseMenus();
+	void InitSettingsFromCurrent();
+	void ApplyQuality();
+	void ApplyResolution();
+	void ApplyVolume();
 
 	// Tutorial
 	void StartTutorial();

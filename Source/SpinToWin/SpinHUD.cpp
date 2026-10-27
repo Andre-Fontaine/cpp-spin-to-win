@@ -1,4 +1,4 @@
-// Spin To Win - 2D overlay: score, level, messages and key prompts.
+// Spin To Win - 2D overlay: score, level, messages, key prompts, and the clickable menus.
 // The dial, hand, target zone and obstacles are 3D meshes (see SpinClock).
 
 #include "SpinHUD.h"
@@ -7,6 +7,22 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+
+namespace
+{
+	FString GetMistakeMessage(ESpinMistake Mistake)
+	{
+		switch (Mistake)
+		{
+		case ESpinMistake::MissedZone:  return TEXT("You missed the zone!");
+		case ESpinMistake::WrongButton: return TEXT("Wrong button, or too early!");
+		case ESpinMistake::HitObstacle: return TEXT("You hit an obstacle!");
+		case ESpinMistake::HandBroke:   return TEXT("The hand broke free!");
+		default:                        return FString();
+		}
+	}
+}
 
 void ASpinHUD::DrawHUD()
 {
@@ -18,6 +34,9 @@ void ASpinHUD::DrawHUD()
 		return;
 	}
 
+	MenuRegions.Reset();
+	bHaveMouse = PlayerOwner && PlayerOwner->GetMousePosition(MousePos.X, MousePos.Y);
+
 	const float W = Canvas->SizeX;
 	const float H = Canvas->SizeY;
 	const float CX = W * 0.5f;
@@ -26,6 +45,7 @@ void ASpinHUD::DrawHUD()
 	const FLinearColor LiftColor(0.4f, 0.9f, 1.f);
 	const FLinearColor DimColor(0.8f, 0.8f, 0.8f);
 	const FLinearColor NoticeColor(1.f, 0.8f, 0.3f);
+	const FLinearColor ButtonBg(0.05f, 0.05f, 0.08f, 0.92f);
 
 	const bool bTutorial = GM->IsTutorial();
 	const bool bTitle = GM->State == ESpinState::WaitingToStart;
@@ -120,11 +140,34 @@ void ASpinHUD::DrawHUD()
 
 	if (bTitle)
 	{
-		// Full-screen main menu: a dark backdrop over the idle dial, title, and two mode cards.
+		// Main menu: PLAY leads to mode select, SETTINGS leads to the settings screen.
 		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.72f), 0.f, 0.f, W, H);
 
 		DrawCenteredText(TEXT("SPIN TO WIN"), CX, MessageY, FLinearColor::Yellow, 2.8f);
-		DrawCenteredText(TEXT("Choose how to play"), CX, MessageY + 58.f, DimColor, 1.2f);
+		DrawCenteredText(TEXT("Click to play"), CX, MessageY + 58.f, DimColor, 1.2f);
+
+		const float BtnW = FMath::Min(W * 0.26f, 260.f);
+		const float BtnH = 80.f;
+		const float Gap = 30.f;
+		const float BtnY = CY - BtnH * 0.5f + 20.f;
+		const float PlayX = CX - Gap * 0.5f - BtnW;
+		const float SettingsX = CX + Gap * 0.5f;
+
+		DrawButton(PlayX, BtnY, BtnW, BtnH, EMenuAction::Play, ButtonBg);
+		DrawCenteredText(TEXT("PLAY"), PlayX + BtnW * 0.5f, BtnY + 26.f, FLinearColor::White, 1.8f);
+
+		DrawButton(SettingsX, BtnY, BtnW, BtnH, EMenuAction::OpenSettings, ButtonBg);
+		DrawCenteredText(TEXT("SETTINGS"), SettingsX + BtnW * 0.5f, BtnY + 26.f, FLinearColor::White, 1.5f);
+
+		if (GM->Prompts.IsValidIndex(1))
+		{
+			DrawCenteredText(FString::Printf(TEXT("Or press %s / %s"), *GM->Prompts[0].Hint, *GM->Prompts[1].Hint), CX, BtnY + BtnH + 30.f, DimColor, 0.9f);
+		}
+	}
+	else if (GM->State == ESpinState::ModeSelect)
+	{
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.72f), 0.f, 0.f, W, H);
+		DrawCenteredText(TEXT("CHOOSE A MODE"), CX, MessageY, FLinearColor::Yellow, 2.4f);
 
 		if (GM->Prompts.IsValidIndex(1))
 		{
@@ -134,20 +177,81 @@ void ASpinHUD::DrawHUD()
 			const float CardW = FMath::Min(W * 0.32f, 320.f);
 			const float CardH = 130.f;
 			const float Gap = 50.f;
-			const float CardY = CY - CardH * 0.5f + 30.f;
+			const float CardY = CY - CardH * 0.5f + 10.f;
 			const float LeftX = CX - Gap * 0.5f - CardW;
 			const float RightX = CX + Gap * 0.5f;
 
-			DrawRect(FLinearColor(0.05f, 0.05f, 0.08f, 0.92f), LeftX, CardY, CardW, CardH);
+			DrawButton(LeftX, CardY, CardW, CardH, EMenuAction::StartTutorial, ButtonBg);
 			DrawCenteredText(TEXT("TUTORIAL"), LeftX + CardW * 0.5f, CardY + 20.f, FLinearColor::White, 1.7f);
 			DrawCenteredText(TEXT("Learn the ropes - 7 short levels"), LeftX + CardW * 0.5f, CardY + 58.f, DimColor, 1.0f);
-			DrawCenteredText(FString::Printf(TEXT("Press %s"), *First.Hint), LeftX + CardW * 0.5f, CardY + 92.f, First.Color, 1.4f);
+			DrawCenteredText(FString::Printf(TEXT("Click, or press %s"), *First.Hint), LeftX + CardW * 0.5f, CardY + 92.f, First.Color, 1.1f);
 
-			DrawRect(FLinearColor(0.05f, 0.05f, 0.08f, 0.92f), RightX, CardY, CardW, CardH);
+			DrawButton(RightX, CardY, CardW, CardH, EMenuAction::StartEndless, ButtonBg);
 			DrawCenteredText(TEXT("ENDLESS"), RightX + CardW * 0.5f, CardY + 20.f, FLinearColor::White, 1.7f);
 			DrawCenteredText(TEXT("Skip straight to the real run"), RightX + CardW * 0.5f, CardY + 58.f, DimColor, 1.0f);
-			DrawCenteredText(FString::Printf(TEXT("Press %s"), *Second.Hint), RightX + CardW * 0.5f, CardY + 92.f, Second.Color, 1.4f);
+			DrawCenteredText(FString::Printf(TEXT("Click, or press %s"), *Second.Hint), RightX + CardW * 0.5f, CardY + 92.f, Second.Color, 1.1f);
+
+			const float BackW = 140.f, BackH = 44.f;
+			const float BackX = CX - BackW * 0.5f;
+			const float BackY = CardY + CardH + 40.f;
+			DrawButton(BackX, BackY, BackW, BackH, EMenuAction::Back, FLinearColor(0.05f, 0.05f, 0.08f, 0.8f));
+			DrawCenteredText(TEXT("BACK"), CX, BackY + 12.f, DimColor, 1.1f);
 		}
+	}
+	else if (GM->State == ESpinState::SettingsMenu)
+	{
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.72f), 0.f, 0.f, W, H);
+		DrawCenteredText(TEXT("SETTINGS"), CX, MessageY, FLinearColor::Yellow, 2.4f);
+
+		const float RowW = FMath::Min(W * 0.5f, 460.f);
+		const float RowX = CX - RowW * 0.5f;
+		const float ArrowW = 44.f, ArrowH = 44.f;
+		const float RowH = 95.f;
+		const float FirstRowY = CY - RowH * 1.2f;
+
+		auto DrawSettingRow = [&](float RowY, const FString& Label, const FString& Value, EMenuAction PrevAction, EMenuAction NextAction)
+		{
+			DrawCenteredText(Label, CX, RowY, DimColor, 1.0f);
+
+			DrawButton(RowX, RowY + 22.f, ArrowW, ArrowH, PrevAction, ButtonBg);
+			DrawCenteredText(TEXT("<"), RowX + ArrowW * 0.5f, RowY + 32.f, FLinearColor::White, 1.4f);
+
+			DrawCenteredText(Value, CX, RowY + 32.f, FLinearColor::White, 1.4f);
+
+			DrawButton(RowX + RowW - ArrowW, RowY + 22.f, ArrowW, ArrowH, NextAction, ButtonBg);
+			DrawCenteredText(TEXT(">"), RowX + RowW - ArrowW * 0.5f, RowY + 32.f, FLinearColor::White, 1.4f);
+		};
+
+		DrawSettingRow(FirstRowY, TEXT("GRAPHICS QUALITY"), GM->GetQualityLabel(), EMenuAction::QualityPrev, EMenuAction::QualityNext);
+		DrawSettingRow(FirstRowY + RowH, TEXT("RESOLUTION"), GM->GetResolutionLabel(), EMenuAction::ResolutionPrev, EMenuAction::ResolutionNext);
+		DrawSettingRow(FirstRowY + RowH * 2.f, TEXT("VOLUME"), FString::Printf(TEXT("%d%%"), GM->VolumePercent), EMenuAction::VolumeDown, EMenuAction::VolumeUp);
+
+		const float BackW = 140.f, BackH = 44.f;
+		const float BackX = CX - BackW * 0.5f;
+		const float BackY = FirstRowY + RowH * 2.f + 70.f;
+		DrawButton(BackX, BackY, BackW, BackH, EMenuAction::Back, FLinearColor(0.05f, 0.05f, 0.08f, 0.8f));
+		DrawCenteredText(TEXT("BACK"), CX, BackY + 12.f, DimColor, 1.1f);
+	}
+	else if (GM->State == ESpinState::MissPause)
+	{
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.78f), 0.f, 0.f, W, H);
+		DrawCenteredText(TEXT("LIFE LOST!"), CX, CY - 125.f, FLinearColor::Red, 2.6f);
+		DrawCenteredText(GetMistakeMessage(GM->LastMistake), CX, CY - 80.f, FLinearColor::White, 1.2f);
+
+		const bool bObstacleLife = (GM->LastMistake == ESpinMistake::HitObstacle);
+		const FString LivesLine = bObstacleLife
+			? FString::Printf(TEXT("%d / %d lives left"), GM->Lives, GM->MaxLives)
+			: FString::Printf(TEXT("%d / %d miss lives left"), GM->MissLives, GM->MaxMissLives);
+		DrawCenteredText(LivesLine, CX, CY - 40.f, FLinearColor::White, 1.3f);
+
+		DrawCenteredText(FString::Printf(TEXT("Continuing gives you %.0f seconds of invincibility to get back in rhythm."), GM->InvincibilityDuration), CX, CY - 5.f, DimColor, 1.0f);
+
+		const float BtnW = 260.f, BtnH = 64.f;
+		const float BtnX = CX - BtnW * 0.5f;
+		const float BtnY = CY + 35.f;
+		DrawButton(BtnX, BtnY, BtnW, BtnH, EMenuAction::ContinueAfterMiss, FLinearColor(0.08f, 0.05f, 0.05f, 0.92f));
+		DrawCenteredText(TEXT("CONTINUE"), CX, BtnY + 18.f, FLinearColor::White, 1.6f);
+		DrawCenteredText(FString::Printf(TEXT("Click, or press %s"), GM->Prompts.IsValidIndex(0) ? *GM->Prompts[0].Hint : TEXT("W")), CX, BtnY + BtnH + 20.f, DimColor, 1.0f);
 	}
 	else if (GM->State == ESpinState::GameOver)
 	{
@@ -179,7 +283,8 @@ void ASpinHUD::DrawHUD()
 	}
 	else if (GM->State == ESpinState::Playing)
 	{
-		// What to do right now.
+		// What to do right now. The invincibility countdown itself is drawn big and centered,
+		// below, so it needs no line here.
 		if (bTutorial)
 		{
 			if (const FTutorialLevel* Level = GM->GetTutorialLevel())
@@ -205,7 +310,7 @@ void ASpinHUD::DrawHUD()
 		}
 
 		// Lift hint.
-		if (GM->ObstaclesEnabled() && !bJammed)
+		if (GM->ObstaclesEnabled() && !bJammed && !GM->bInvincible)
 		{
 			const ASpinClock* LiftClock = GM->GetClock();
 			if (LiftClock && LiftClock->IsLiftAvailable())
@@ -255,6 +360,15 @@ void ASpinHUD::DrawHUD()
 	if (!bTutorial && GM->IsShowingLevelBanner())
 	{
 		DrawCenteredText(FString::Printf(TEXT("LEVEL %d"), GM->GetLevel()), CX, MessageY, FLinearColor::Yellow, 2.4f);
+	}
+
+	// Invincibility countdown: a big "in your face" number, dead center, that punches in huge
+	// and quickly shrinks and fades away - once per second, for both the post-mistake recovery
+	// window and the few seconds at the start of a fresh run. Skipped for an obstacle hit - the
+	// obstacle's own feedback is enough, and the giant number just gets in the way there.
+	if (GM->State == ESpinState::Playing && GM->bInvincible && GM->LastMistake != ESpinMistake::HitObstacle)
+	{
+		DrawInvincibilityCountdown(GM->InvincibleTimeRemaining, CX, CY);
 	}
 
 	// "New button unlocked" pause screen (Endless).
@@ -331,4 +445,46 @@ void ASpinHUD::DrawCenteredText(const FString& Text, float CenterX, float Y, con
 	float W = 0.f, H = 0.f;
 	GetTextSize(Text, W, H, Font, Scale);
 	DrawText(Text, Color, CenterX - W * 0.5f, Y, Font, Scale);
+}
+
+bool ASpinHUD::IsHovered(float X, float Y, float W, float H) const
+{
+	return bHaveMouse && MousePos.X >= X && MousePos.X <= X + W && MousePos.Y >= Y && MousePos.Y <= Y + H;
+}
+
+void ASpinHUD::DrawButton(float X, float Y, float W, float H, EMenuAction Action, const FLinearColor& BgColor)
+{
+	const bool bHover = IsHovered(X, Y, W, H);
+	const FLinearColor Final = bHover ? (BgColor + FLinearColor(0.1f, 0.1f, 0.12f, 0.f)) : BgColor;
+	DrawRect(Final, X, Y, W, H);
+
+	FSpinMenuRegion Region;
+	Region.Rect = FBox2D(FVector2D(X, Y), FVector2D(X + W, Y + H));
+	Region.Action = Action;
+	MenuRegions.Add(Region);
+}
+
+void ASpinHUD::DrawInvincibilityCountdown(float TimeRemaining, float CenterX, float CenterY)
+{
+	// Which whole second are we in ("5", "4", ... "1"), and how far into that second's display.
+	const int32 Number = FMath::Max(1, FMath::CeilToInt(TimeRemaining - KINDA_SMALL_NUMBER));
+	const float TimeIntoNumber = Number - TimeRemaining;
+
+	// The punch animation itself is much shorter than the full second, so the number appears,
+	// slams in huge, and is gone well before the next one - rather than lingering.
+	const float PunchDuration = 0.6f;
+	if (TimeIntoNumber < 0.f || TimeIntoNumber >= PunchDuration)
+	{
+		return;
+	}
+
+	const float T = TimeIntoNumber / PunchDuration;
+	const float Scale = FMath::Lerp(16.f, 6.f, T * T);
+	const float Alpha = FMath::Square(1.f - T);
+
+	const FString Text = FString::FromInt(Number);
+	UFont* Font = GEngine ? GEngine->GetLargeFont() : nullptr;
+	float TextW = 0.f, TextH = 0.f;
+	GetTextSize(Text, TextW, TextH, Font, Scale);
+	DrawText(Text, FLinearColor(1.f, 0.85f, 0.15f, Alpha), CenterX - TextW * 0.5f, CenterY - TextH * 0.5f, Font, Scale);
 }
