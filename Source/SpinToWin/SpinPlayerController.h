@@ -13,7 +13,7 @@
  *   Lift (hold):  Left Mouse Button / Gamepad Right Trigger (R2)
  *
  * The same Left Mouse Button also drives the menus: on the menu screens (main menu, mode select,
- * settings, miss-pause) a click is tested against the HUD's clickable regions instead of being
+ * settings, leaderboard, profiles, name entry, miss-pause, game over, tutorial complete) a click is tested against the HUD's clickable regions instead of being
  * treated as a lift. The mouse cursor is shown automatically whenever one of those screens is up.
  */
 UCLASS()
@@ -28,6 +28,9 @@ protected:
 	virtual void SetupInputComponent() override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/** Routes raw keyboard input to name entry while a name is being typed, bypassing the bindings. */
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
+
 private:
 	void OnButton0();
 	void OnButton1();
@@ -35,6 +38,9 @@ private:
 	void OnLiftReleased();
 	void PressButton(int32 ButtonIndex);
 	void SetLift(bool bHeld);
+
+	/** One name-entry keystroke: letters, digits, space, backspace, Enter (confirm), Escape (cancel). */
+	void HandleNameKey(class ASpinGameMode& GM, const FKey& Key, bool bRepeat);
 
 	/** Tests the current mouse position against the HUD's clickable regions and, on a hit,
 	 *  forwards the action to the game mode. Returns true if a menu screen was up at all

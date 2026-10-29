@@ -4,11 +4,14 @@
 #include "SpinPlayerController.h"
 #include "SpinHUD.h"
 #include "SpinClock.h"
+#include "SpinSaveGame.h"
 #include "AudioDevice.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/GameUserSettings.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
 
 ASpinGameMode::ASpinGameMode()
 {
@@ -169,6 +172,8 @@ void ASpinGameMode::StartPlay()
 {
 	Super::StartPlay();
 
+	LoadSaveData();
+
 	UWorld* World = GetWorld();
 	if (!World)
 	{
@@ -225,7 +230,8 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	// Clamp so a frame hitch can't make the hand skip over the zone.
 	const float Dt = FMath::Min(DeltaSeconds, 0.05f);
 
-	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu)
+	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu
+		|| State == ESpinState::Leaderboard || State == ESpinState::ProfileSelect || State == ESpinState::NameEntry)
 	{
 		// Slow idle spin behind the menus.
 		HandAngle = FMath::Fmod(HandAngle + StartSpeed * 0.5f * Dt, 360.f);
@@ -249,6 +255,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 			bInvincible = false;
 			InvincibleTimeRemaining = 0.f;
 			bHandWasInZone = false;
+			InvincibilityEndTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
 		}
 		else
 		{
@@ -346,6 +353,19 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		// No keyboard shortcuts here - mouse only for now.
 		break;
 
+	case ESpinState::Leaderboard:
+	case ESpinState::ProfileSelect:
+		// The second button backs out (the BACK button does the same). Picking a profile is mouse-only.
+		if (ButtonIndex == 1)
+		{
+			CloseMenus();
+		}
+		break;
+
+	case ESpinState::NameEntry:
+		// Typing goes through TypeNameChar instead - the player controller intercepts the keyboard.
+		break;
+
 	case ESpinState::MissPause:
 		if (ButtonIndex == 0)
 		{
@@ -405,6 +425,14 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		// Waits for the lift button instead, see SetLiftHeld.
 		break;
 
+	case ESpinState::JamIntro:
+		// Confirmed with the first button - the same one that repairs a jam.
+		if (ButtonIndex == 0)
+		{
+			ResumeAfterIntro();
+		}
+		break;
+
 	case ESpinState::TutorialIntro:
 	{
 		const FTutorialLevel* Level = GetTutorialLevel();
@@ -430,9 +458,18 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 
 	case ESpinState::GameOver:
-		if (GetWorld() && GetWorld()->GetTimeSeconds() - GameOverTime >= RestartDelay)
+		// Mirrors the game-over menu: first button retries, second goes back to the main menu.
+		// Quitting is mouse-only so it can't happen by accident.
+		if (IsGameOverMenuReady())
 		{
-			StartGame();
+			if (ButtonIndex == 0)
+			{
+				StartGame();
+			}
+			else
+			{
+				ReturnToTitle();
+			}
 		}
 		break;
 	}
@@ -544,14 +581,38 @@ bool ASpinGameMode::IsHandInZone() const
 	return FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) <= ZoneHalfWidth;
 }
 
+int32 ASpinGameMode::GetHitsForLevel(int32 Level) const
+{
+	const bool bShortened = bFastStart && Level <= FastStartLevels;
+	return FMath::Max(1, bShortened ? FastStartHitsPerLevel : HitsPerLevel);
+}
+
 int32 ASpinGameMode::GetLevel() const
 {
-	return 1 + Score / FMath::Max(1, HitsPerLevel);
+	// Walk the levels, since a fast start makes the opening ones shorter than the rest.
+	int32 Level = 1;
+	int32 LevelEnd = GetHitsForLevel(1);
+	while (Hits >= LevelEnd)
+	{
+		++Level;
+		LevelEnd += GetHitsForLevel(Level);
+	}
+	return Level;
 }
 
 int32 ASpinGameMode::GetLevelTarget() const
 {
-	return GetLevel() * FMath::Max(1, HitsPerLevel);
+	int32 LevelEnd = 0;
+	for (int32 Level = 1, Current = GetLevel(); Level <= Current; ++Level)
+	{
+		LevelEnd += GetHitsForLevel(Level);
+	}
+	return LevelEnd;
+}
+
+const USpinSaveGame* ASpinGameMode::GetSaveData() const
+{
+	return SaveData;
 }
 
 int32 ASpinGameMode::GetNumActiveButtons() const
@@ -593,6 +654,229 @@ float ASpinGameMode::GetJamTimeFraction() const
 	return FMath::Clamp(1.f - JamTimer / FMath::Max(0.01f, JamTimeLimit), 0.f, 1.f);
 }
 
+float ASpinGameMode::GetHitPulse() const
+{
+	if (!GetWorld())
+	{
+		return 0.f;
+	}
+
+	// Snaps to full on the hit, then falls off quickly (squared) so it reads as a punchy flash.
+	const float T = (GetWorld()->GetTimeSeconds() - LastHitTime) / FMath::Max(0.01f, HitPulseDuration);
+	return (T >= 0.f && T < 1.f) ? FMath::Square(1.f - T) : 0.f;
+}
+
+bool ASpinGameMode::IsGameOverMenuReady() const
+{
+	return State == ESpinState::GameOver && GetWorld() && GetWorld()->GetTimeSeconds() - GameOverTime >= RestartDelay;
+}
+
+void ASpinGameMode::RegisterHit()
+{
+	if (GetWorld())
+	{
+		LastHitTime = GetWorld()->GetTimeSeconds();
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scoring and the saved leaderboard
+// ---------------------------------------------------------------------------------------------
+
+ESpinHitGrade ASpinGameMode::GradeHit() const
+{
+	// 0 = dead centre of the zone, 1 = its very edge.
+	const float Offset = FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) / FMath::Max(0.01f, ZoneHalfWidth);
+
+	if (Offset <= PerfectFraction)
+	{
+		return ESpinHitGrade::Perfect;
+	}
+	return Offset <= GoodFraction ? ESpinHitGrade::Good : ESpinHitGrade::Ok;
+}
+
+void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
+{
+	LastHitGrade = Grade;
+
+	// PERFECT builds the streak, GOOD holds it, OK breaks it.
+	if (Grade == ESpinHitGrade::Perfect)
+	{
+		++PerfectStreak;
+		ComboMultiplier = FMath::Min(MaxMultiplier, 1 + PerfectStreak / FMath::Max(1, PerfectsPerMultiplier));
+	}
+	else if (Grade == ESpinHitGrade::Ok)
+	{
+		BreakCombo();
+	}
+
+	const int32 BasePoints = (Grade == ESpinHitGrade::Perfect) ? PerfectPoints
+		: (Grade == ESpinHitGrade::Good) ? GoodPoints
+		: OkPoints;
+
+	LastHitPoints = FMath::RoundToInt(BasePoints * PointsScale) * ComboMultiplier;
+	const int32 OldPoints = Points;
+	Points += LastHitPoints;
+
+	// Flash the moment this run overtakes the saved best (only once, and only if there is one).
+	if (BestPoints > 0 && OldPoints <= BestPoints && Points > BestPoints && GetWorld())
+	{
+		PassedBestPointsTime = GetWorld()->GetTimeSeconds();
+	}
+}
+
+void ASpinGameMode::BreakCombo()
+{
+	if (ComboMultiplier > 1 && GetWorld())
+	{
+		ComboLostTime = GetWorld()->GetTimeSeconds();
+	}
+	PerfectStreak = 0;
+	ComboMultiplier = 1;
+}
+
+void ASpinGameMode::LoadSaveData()
+{
+	SaveData = Cast<USpinSaveGame>(UGameplayStatics::LoadGameFromSlot(USpinSaveGame::SlotName, 0));
+	if (!SaveData)
+	{
+		SaveData = Cast<USpinSaveGame>(UGameplayStatics::CreateSaveGameObject(USpinSaveGame::StaticClass()));
+	}
+}
+
+void ASpinGameMode::RecordRun()
+{
+	LastRunLevelRank = 0;
+	LastRunScoreRank = 0;
+
+	// A run that never landed a hit isn't worth a leaderboard slot.
+	if (!SaveData || Hits <= 0)
+	{
+		return;
+	}
+
+	FSpinRunRecord Run;
+	Run.PlayerName = GetPlayerName();
+	Run.Level = GetLevel();
+	Run.Points = Points;
+	Run.Hits = Hits;
+	Run.Date = FDateTime::Now();
+
+	SaveData->AddRun(Run, LeaderboardSize, LastRunLevelRank, LastRunScoreRank);
+	WriteSaveData();
+}
+
+void ASpinGameMode::WriteSaveData()
+{
+	if (SaveData)
+	{
+		UGameplayStatics::SaveGameToSlot(SaveData, USpinSaveGame::SlotName, 0);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// Player profiles
+// ---------------------------------------------------------------------------------------------
+
+FString ASpinGameMode::GetPlayerName() const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	return Profile ? Profile->Name : FString();
+}
+
+void ASpinGameMode::OpenProfiles()
+{
+	PendingDeleteProfile = INDEX_NONE;
+	State = ESpinState::ProfileSelect;
+}
+
+void ASpinGameMode::BeginNameEntry(bool bThenPlay)
+{
+	NameEntryText.Reset();
+	NameEntryError.Reset();
+	bNameEntryThenPlay = bThenPlay;
+	State = ESpinState::NameEntry;
+}
+
+void ASpinGameMode::TypeNameChar(TCHAR Char)
+{
+	if (State == ESpinState::NameEntry && NameEntryText.Len() < USpinSaveGame::MaxNameLength)
+	{
+		// No leading or double spaces - they'd just make names that look identical.
+		if (Char == TEXT(' ') && (NameEntryText.IsEmpty() || NameEntryText.EndsWith(TEXT(" "))))
+		{
+			return;
+		}
+		NameEntryText.AppendChar(Char);
+		NameEntryError.Reset();
+	}
+}
+
+void ASpinGameMode::EraseNameChar()
+{
+	if (State == ESpinState::NameEntry && !NameEntryText.IsEmpty())
+	{
+		NameEntryText.LeftChopInline(1);
+		NameEntryError.Reset();
+	}
+}
+
+void ASpinGameMode::ConfirmName()
+{
+	if (State != ESpinState::NameEntry || !SaveData)
+	{
+		return;
+	}
+
+	const FString Name = NameEntryText.TrimStartAndEnd();
+	if (Name.IsEmpty())
+	{
+		NameEntryError = TEXT("Type a name first");
+		return;
+	}
+	if (SaveData->FindProfile(Name) != INDEX_NONE)
+	{
+		NameEntryError = FString::Printf(TEXT("%s is already taken - pick it from the player list instead"), *Name);
+		return;
+	}
+
+	if (SaveData->AddProfile(Name) == INDEX_NONE)
+	{
+		NameEntryError = FString::Printf(TEXT("%d players max - delete one first"), USpinSaveGame::MaxProfiles);
+		return;
+	}
+	WriteSaveData();
+
+	if (bNameEntryThenPlay)
+	{
+		bNameEntryThenPlay = false;
+		OpenModeSelect();
+	}
+	else
+	{
+		CloseMenus();
+	}
+}
+
+void ASpinGameMode::CancelName()
+{
+	if (State != ESpinState::NameEntry)
+	{
+		return;
+	}
+
+	// Back to wherever it was opened from: the profile list, or the main menu if it came from PLAY.
+	if (bNameEntryThenPlay || !SaveData || SaveData->Profiles.Num() == 0)
+	{
+		bNameEntryThenPlay = false;
+		CloseMenus();
+	}
+	else
+	{
+		OpenProfiles();
+	}
+}
+
 // ---------------------------------------------------------------------------------------------
 // Endless mode
 // ---------------------------------------------------------------------------------------------
@@ -601,7 +885,25 @@ void ASpinGameMode::StartGame()
 {
 	Mode = ESpinMode::Endless;
 	State = ESpinState::Playing;
-	Score = 0;
+	Hits = 0;
+	Points = 0;
+	ComboMultiplier = 1;
+	PerfectStreak = 0;
+	LastHitGrade = ESpinHitGrade::None;
+	LastHitPoints = 0;
+	ComboLostTime = -1000.f;
+	PassedBestPointsTime = -1000.f;
+
+	// What this run is chasing (the player's own bests), and whether they've earned a quicker opening.
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	BestLevel = Profile ? Profile->BestLevel : 0;
+	BestPoints = Profile ? Profile->BestPoints : 0;
+	bFastStart = FastStartLevels > 0 && BestLevel >= FastStartUnlockLevel;
+	if (bFastStart)
+	{
+		ShowNotice(FString::Printf(TEXT("FAST START: you've reached level %d before, so the first %d levels fly by"), BestLevel, FastStartLevels));
+	}
+
 	HandAngle = 0.f;
 	Direction = 1.f;
 	CurrentSpeed = StartSpeed;
@@ -620,6 +922,7 @@ void ASpinGameMode::StartGame()
 	// go wrong, same as resuming after a mistake.
 	bInvincible = true;
 	InvincibleTimeRemaining = InvincibilityDuration;
+	InvincibilityEndTime = -1000.f;
 	LastMistake = ESpinMistake::None;
 	bHandBroke = false;
 	bHandWasInZone = false;
@@ -633,16 +936,32 @@ void ASpinGameMode::OnHit()
 {
 	const int32 OldLevel = GetLevel();
 
-	++Score;
-	HighScore = FMath::Max(HighScore, Score);
+	// A shortened (fast start) level packs HitsPerLevel hits' worth of ramp into fewer hits, so
+	// each of its hits counts for that many normal ones - in speed, zone shrink, and points.
+	const float RampSteps = static_cast<float>(FMath::Max(1, HitsPerLevel)) / GetHitsForLevel(OldLevel);
+
+	// Grade the hit before anything moves.
+	ScoreHit(GradeHit(), RampSteps);
+
+	++Hits;
+	RegisterHit();
 
 	const int32 NewLevel = GetLevel();
 	const bool bUnlocksSecondButton = OldLevel < SecondButtonLevel && NewLevel >= SecondButtonLevel && Prompts.Num() > 1;
-	// If both unlock on the same level, the new-button screen wins.
-	const bool bObstacleIntro = !bUnlocksSecondButton && OldLevel < ObstacleStartLevel && NewLevel >= ObstacleStartLevel;
+	const bool bUnlocksObstacles = OldLevel < ObstacleStartLevel && NewLevel >= ObstacleStartLevel;
+	const bool bUnlocksJams = OldLevel < JamStartLevel && NewLevel >= JamStartLevel;
+
+	// The explanation (pause) screens only show until the saved best has reached that level - after
+	// that the player has seen them, and the "next level" heads-up plus the level banner's unlock line
+	// are enough. Only one screen at a time; if several land on the same level, the new-button
+	// screen wins, then obstacles, then jams.
+	const bool bSecondButtonIntro = bUnlocksSecondButton && BestLevel < SecondButtonLevel;
+	const bool bObstacleIntro = !bSecondButtonIntro && bUnlocksObstacles && BestLevel < ObstacleStartLevel;
+	const bool bJamIntro = !bSecondButtonIntro && !bObstacleIntro && bUnlocksJams && BestLevel < JamStartLevel;
+	const bool bPauseScreen = bSecondButtonIntro || bObstacleIntro || bJamIntro;
 
 	// The normal "LEVEL N" banner is skipped when a pause screen takes over instead.
-	if (NewLevel > OldLevel && GetWorld() && !bUnlocksSecondButton && !bObstacleIntro)
+	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
 	{
 		LevelUpTime = GetWorld()->GetTimeSeconds();
 		Shake(LevelUpShake);
@@ -652,18 +971,18 @@ void ASpinGameMode::OnHit()
 
 	// Flip direction, speed up, shrink the zone, and pick the next target.
 	Direction = -Direction;
-	CurrentSpeed = FMath::Min(CurrentSpeed * SpeedMultiplier, MaxSpeed);
-	ZoneHalfWidth = FMath::Max(MinZoneHalfWidth, ZoneHalfWidth - ZoneShrinkPerHit);
+	CurrentSpeed = FMath::Min(CurrentSpeed * FMath::Pow(SpeedMultiplier, RampSteps), MaxSpeed);
+	ZoneHalfWidth = FMath::Max(MinZoneHalfWidth, ZoneHalfWidth - ZoneShrinkPerHit * RampSteps);
 	bHandWasInZone = false;
 
 	// Pick which button the next zone needs (random once two buttons are in play).
 	PickNextPrompt();
 
 	// No new obstacle while a pause screen is about to take over.
-	PlaceNextZone(!bUnlocksSecondButton && !bObstacleIntro);
+	PlaceNextZone(!bPauseScreen);
 
 	// Sometimes the hand starts to overheat.
-	if (!bUnlocksSecondButton && !bObstacleIntro && JamPhase == EJamPhase::None
+	if (!bPauseScreen && JamPhase == EJamPhase::None
 		&& GetLevel() >= JamStartLevel && FMath::FRand() < JamChance)
 	{
 		StartJamSparks();
@@ -671,12 +990,17 @@ void ASpinGameMode::OnHit()
 
 	if (bUnlocksSecondButton)
 	{
-		// Second button just unlocked: pause, reset the hand to its slowest speed and the zone to
-		// its widest, make the very first zone need the new button, and wait for confirmation.
+		// Second button just unlocked: reset the hand to its slowest speed and the zone to its
+		// widest, and make the very first zone need the new button - with or without the screen.
 		CurrentSpeed = StartSpeed;
 		ZoneHalfWidth = StartZoneHalfWidth;
 		ActivePromptIndex = 1;
 		PromptStreak = 1;
+	}
+
+	if (bSecondButtonIntro)
+	{
+		// Pause and wait for the player to press the new button.
 		State = ESpinState::NewButtonIntro;
 		Shake(LevelUpShake);
 	}
@@ -686,6 +1010,38 @@ void ASpinGameMode::OnHit()
 		State = ESpinState::ObstacleIntro;
 		Shake(LevelUpShake);
 	}
+	else if (bJamIntro)
+	{
+		// Jams can happen from here on: explain the warning signs and the fix before the first one.
+		State = ESpinState::JamIntro;
+		Shake(LevelUpShake);
+	}
+}
+
+bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& OutHint) const
+{
+	TArray<FString> Titles;
+	TArray<FString> Hints;
+
+	if (Level == ObstacleStartLevel)
+	{
+		Titles.Add(TEXT("OBSTACLES"));
+		Hints.Add(TEXT("Hold LEFT CLICK / R2 to raise the hand over them"));
+	}
+	if (Level == SecondButtonLevel && Prompts.IsValidIndex(1))
+	{
+		Titles.Add(TEXT("SECOND BUTTON"));
+		Hints.Add(FString::Printf(TEXT("Zones can ask for %s too - match the colour"), *Prompts[1].Hint));
+	}
+	if (Level == JamStartLevel && Prompts.IsValidIndex(0))
+	{
+		Titles.Add(TEXT("JAMS"));
+		Hints.Add(FString::Printf(TEXT("Sparks mean a jam is coming - mash %s to repair it"), *Prompts[0].Hint));
+	}
+
+	OutTitle = FString::Join(Titles, TEXT("  +  "));
+	OutHint = FString::Join(Hints, TEXT("   |   "));
+	return Titles.Num() > 0;
 }
 
 void ASpinGameMode::OnZoneMissed()
@@ -698,6 +1054,7 @@ void ASpinGameMode::FailAndPause(ESpinMistake Mistake)
 	LastMistake = Mistake;
 	Shake(LifeLostShake);
 	bHandWasInZone = false;
+	BreakCombo();
 
 	// Obstacle hits spend the regenerating "Lives" pool; everything else spends the
 	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise the
@@ -777,7 +1134,7 @@ void ASpinGameMode::EndGame()
 	}
 
 	State = ESpinState::GameOver;
-	HighScore = FMath::Max(HighScore, Score);
+	RecordRun();
 
 	// Stop the sparks, but a hand that broke stays visibly broken.
 	if (!bHandBroke)
@@ -795,7 +1152,9 @@ void ASpinGameMode::EndGame()
 void ASpinGameMode::StartTutorial()
 {
 	Mode = ESpinMode::Tutorial;
-	Score = 0;
+	Hits = 0;
+	Points = 0;
+	LastHitGrade = ESpinHitGrade::None;
 	Lives = MaxLives;
 	LifeLostTime = -1000.f;
 	LifeGainedTime = -1000.f;
@@ -880,8 +1239,13 @@ void ASpinGameMode::OnTutorialHit()
 		return;
 	}
 
+	// Grade the hit so the tutorial teaches aiming for the centre, but no points are scored.
+	LastHitGrade = GradeHit();
+	LastHitPoints = 0;
+
 	++TutorialHits;
 	Shake(HitShake);
+	RegisterHit();
 
 	// Level finished.
 	if (TutorialHits >= Level->Hits)
@@ -961,6 +1325,9 @@ void ASpinGameMode::RespawnObstacleForCurrentZone()
 void ASpinGameMode::ReturnToTitle()
 {
 	State = ESpinState::WaitingToStart;
+	bInvincible = false;
+	InvincibilityEndTime = -1000.f;
+	bHandBroke = false;
 	ResetJam();
 	if (Clock)
 	{
@@ -973,8 +1340,19 @@ void ASpinGameMode::ReturnToTitle()
 // Menus
 // ---------------------------------------------------------------------------------------------
 
+void ASpinGameMode::QuitGame()
+{
+	UKismetSystemLibrary::QuitGame(this, GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr, EQuitPreference::Quit, false);
+}
+
 void ASpinGameMode::OpenModeSelect()
 {
+	// Runs are saved under a name, so the first PLAY on a fresh save asks for one.
+	if (GetPlayerName().IsEmpty())
+	{
+		BeginNameEntry(true);
+		return;
+	}
 	State = ESpinState::ModeSelect;
 }
 
@@ -984,15 +1362,73 @@ void ASpinGameMode::OpenSettings()
 	State = ESpinState::SettingsMenu;
 }
 
+void ASpinGameMode::OpenLeaderboard()
+{
+	State = ESpinState::Leaderboard;
+}
+
 void ASpinGameMode::CloseMenus()
 {
 	State = ESpinState::WaitingToStart;
 }
 
-void ASpinGameMode::HandleMenuAction(EMenuAction Action)
+void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 {
 	switch (Action)
 	{
+	case EMenuAction::OpenProfiles:
+		if (State == ESpinState::WaitingToStart)
+		{
+			OpenProfiles();
+		}
+		break;
+
+	case EMenuAction::SelectProfile:
+		if (State == ESpinState::ProfileSelect && SaveData && SaveData->Profiles.IsValidIndex(Index))
+		{
+			SaveData->ActiveProfile = Index;
+			WriteSaveData();
+			CloseMenus();
+		}
+		break;
+
+	case EMenuAction::NewProfile:
+		if (State == ESpinState::ProfileSelect)
+		{
+			BeginNameEntry(false);
+		}
+		break;
+
+	case EMenuAction::DeleteProfile:
+		if (State == ESpinState::ProfileSelect && SaveData && SaveData->Profiles.IsValidIndex(Index))
+		{
+			PendingDeleteProfile = Index;
+		}
+		break;
+
+	case EMenuAction::ConfirmDeleteProfile:
+		if (State == ESpinState::ProfileSelect && SaveData && SaveData->Profiles.IsValidIndex(PendingDeleteProfile))
+		{
+			SaveData->DeleteProfile(PendingDeleteProfile);
+			WriteSaveData();
+			PendingDeleteProfile = INDEX_NONE;
+			LastRunLevelRank = 0; // board positions have shifted
+			LastRunScoreRank = 0;
+		}
+		break;
+
+	case EMenuAction::CancelDeleteProfile:
+		PendingDeleteProfile = INDEX_NONE;
+		break;
+
+	case EMenuAction::ConfirmName:
+		ConfirmName();
+		break;
+
+	case EMenuAction::CancelName:
+		CancelName();
+		break;
+
 	case EMenuAction::Play:
 		if (State == ESpinState::WaitingToStart)
 		{
@@ -1007,8 +1443,16 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action)
 		}
 		break;
 
+	case EMenuAction::OpenLeaderboard:
+		if (State == ESpinState::WaitingToStart)
+		{
+			OpenLeaderboard();
+		}
+		break;
+
 	case EMenuAction::Back:
-		if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu)
+		if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu || State == ESpinState::Leaderboard
+			|| State == ESpinState::ProfileSelect)
 		{
 			CloseMenus();
 		}
@@ -1022,7 +1466,7 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action)
 		break;
 
 	case EMenuAction::StartEndless:
-		if (State == ESpinState::ModeSelect)
+		if (State == ESpinState::ModeSelect || State == ESpinState::TutorialComplete)
 		{
 			StartGame();
 		}
@@ -1062,6 +1506,27 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action)
 		if (State == ESpinState::MissPause)
 		{
 			ResumeAfterMiss();
+		}
+		break;
+
+	case EMenuAction::RetryGame:
+		if (IsGameOverMenuReady())
+		{
+			StartGame();
+		}
+		break;
+
+	case EMenuAction::ReturnToMainMenu:
+		if (IsGameOverMenuReady() || State == ESpinState::TutorialComplete)
+		{
+			ReturnToTitle();
+		}
+		break;
+
+	case EMenuAction::QuitGame:
+		if (IsGameOverMenuReady())
+		{
+			QuitGame();
 		}
 		break;
 

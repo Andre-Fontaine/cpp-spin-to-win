@@ -7,6 +7,7 @@
 #include "SpinGameMode.generated.h"
 
 class ASpinClock;
+class USpinSaveGame;
 
 UENUM(BlueprintType)
 enum class ESpinState : uint8
@@ -17,12 +18,20 @@ enum class ESpinState : uint8
 	ModeSelect,
 	/** SETTINGS was chosen: graphics quality, resolution, and volume. */
 	SettingsMenu,
+	/** LEADERBOARD was chosen: the saved best runs, by level and by score. */
+	Leaderboard,
+	/** "Who's playing?": pick, add, or delete a player profile. */
+	ProfileSelect,
+	/** Typing a new player's name (keyboard). */
+	NameEntry,
 	Playing,
 	GameOver,
 	/** Endless: paused on the "new button unlocked" screen until the player presses the new button. */
 	NewButtonIntro,
 	/** Endless: paused on the "obstacles" screen until the player holds the lift button. */
 	ObstacleIntro,
+	/** Endless: paused on the "jams" screen (first time jams can happen) until the player presses the first button. */
+	JamIntro,
 	/** Endless: paused after any life-costing mistake (missed zone, wrong button, obstacle hit,
 	 *  or a jam that broke the hand), until the player confirms to continue. */
 	MissPause,
@@ -48,6 +57,19 @@ enum class ESpinMistake : uint8
 	HandBroke
 };
 
+/** How close to the centre of the zone a hit landed. Decides its points and the combo. */
+UENUM(BlueprintType)
+enum class ESpinHitGrade : uint8
+{
+	None,
+	/** Near the edge of the zone: few points, and the combo resets. */
+	Ok,
+	/** Reasonably central: decent points, the combo holds but doesn't grow. */
+	Good,
+	/** Dead centre: full points, and builds the combo. */
+	Perfect
+};
+
 /** An action a HUD menu button can trigger when clicked (or confirmed by keyboard/gamepad). */
 UENUM(BlueprintType)
 enum class EMenuAction : uint8
@@ -55,6 +77,7 @@ enum class EMenuAction : uint8
 	None,
 	Play,
 	OpenSettings,
+	OpenLeaderboard,
 	Back,
 	StartTutorial,
 	StartEndless,
@@ -65,6 +88,19 @@ enum class EMenuAction : uint8
 	VolumeDown,
 	VolumeUp,
 	ContinueAfterMiss,
+	RetryGame,
+	ReturnToMainMenu,
+	QuitGame,
+	OpenProfiles,
+	/** Index = which profile. */
+	SelectProfile,
+	NewProfile,
+	/** Index = which profile. Asks for confirmation first. */
+	DeleteProfile,
+	ConfirmDeleteProfile,
+	CancelDeleteProfile,
+	ConfirmName,
+	CancelName,
 };
 
 UENUM(BlueprintType)
@@ -175,7 +211,8 @@ struct FTutorialLevel
  * Two modes:
  *  - Tutorial: 7 short, unfailable levels, each with fixed speed and zone size.
  *  - Endless: every HitsPerLevel hits moves you up a level (cumulative counter), difficulty ramps with every
- *    hit, mistakes cost lives or end the run.
+ *    hit, mistakes cost lives or end the run. Hits drive the level; points (precision x combo) are the
+ *    score. Finished runs go on a saved local leaderboard, ranked separately by level and by points.
  */
 UCLASS()
 class SPINTOWIN_API ASpinGameMode : public AGameModeBase
@@ -197,8 +234,18 @@ public:
 	/** Called by the clock when the hand has hopped over an obstacle: gives a life back. */
 	void OnObstacleCleared();
 
-	/** Called by the player controller for a clicked (or keyboard-confirmed) menu button. */
-	void HandleMenuAction(EMenuAction Action);
+	/** Called by the player controller for a clicked (or keyboard-confirmed) menu button. Index is
+	 *  for actions on one item of a list (e.g. which profile), INDEX_NONE otherwise. */
+	void HandleMenuAction(EMenuAction Action, int32 Index = INDEX_NONE);
+
+	/** Name entry (ESpinState::NameEntry), fed by the player controller's raw keyboard input. */
+	void TypeNameChar(TCHAR Char);
+	void EraseNameChar();
+	void ConfirmName();
+	void CancelName();
+
+	/** Name of whoever is playing, or empty if no profile has been picked/created yet. */
+	FString GetPlayerName() const;
 
 	FString GetQualityLabel() const;
 	FString GetResolutionLabel() const;
@@ -241,7 +288,57 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
 	int32 HitsPerLevel = 10;
 
-	/** The level at which the second button is introduced. */
+	// ---------------- Fast start (Endless) ----------------
+
+	/** Once the saved best run has reached this level, the opening levels of every run go by
+	 *  quicker, so returning players don't have to grind through the slow start each time. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|FastStart", meta = (ClampMin = "1"))
+	int32 FastStartUnlockLevel = 5;
+
+	/** How many opening levels are shortened on a fast start. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|FastStart", meta = (ClampMin = "0"))
+	int32 FastStartLevels = 3;
+
+	/** Hits needed per shortened level. Speed, zone shrink, and points per hit are all scaled up
+	 *  to match, so a run arrives at the end of the fast start exactly as hard (and with comparable
+	 *  points) as a normal one - only quicker. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|FastStart", meta = (ClampMin = "1"))
+	int32 FastStartHitsPerLevel = 4;
+
+	// ---------------- Scoring (Endless) ----------------
+
+	/** A hit within this fraction of the zone's half-width from its centre is PERFECT. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "0", ClampMax = "1"))
+	float PerfectFraction = 0.3f;
+
+	/** A hit within this fraction of the zone's half-width from its centre is GOOD (else OK). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "0", ClampMax = "1"))
+	float GoodFraction = 0.65f;
+
+	/** Base points per hit grade, before the combo multiplier. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring")
+	int32 PerfectPoints = 100;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring")
+	int32 GoodPoints = 50;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring")
+	int32 OkPoints = 20;
+
+	/** Every this many PERFECT hits in a row adds +1 to the combo multiplier. A GOOD hit holds the
+	 *  streak; an OK hit or any mistake resets it. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "1"))
+	int32 PerfectsPerMultiplier = 5;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "1"))
+	int32 MaxMultiplier = 5;
+
+	/** How many runs each leaderboard keeps. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "1"))
+	int32 LeaderboardSize = 10;
+
+	/** The level at which the second button is introduced. Its explanation screen (like the
+	 *  obstacle and jam ones) only shows until the saved best run has reached that level. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
 	int32 SecondButtonLevel = 5;
 
@@ -337,9 +434,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float MaxZoneOffset = 200.f;
 
-	/** Seconds after game over before a button press restarts (avoids accidental restarts). */
+	/** Seconds after game over before the game-over menu accepts input (avoids an accidental retry
+	 *  from a press that was meant for the hand). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float RestartDelay = 0.6f;
+	float RestartDelay = 1.f;
 
 	/** Seconds of invincibility after confirming a life-lost pause screen - obstacles, zone
 	 *  misses, jams, and button presses are all ignored until this runs out. */
@@ -359,6 +457,10 @@ public:
 	/** Big shake when the run ends. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
 	float GameOverShake = 1.0f;
+
+	/** How long the light pulse after a successful hit takes to fade out, in seconds. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0.01"))
+	float HitPulseDuration = 0.45f;
 
 	// ---------------- State (read by the HUD) ----------------
 
@@ -384,13 +486,66 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float ZoneHalfWidth = 32.f;
 
-	/** Total hits this Endless run (cumulative across levels). */
+	/** Total hits this Endless run (cumulative across levels). Drives the level. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
-	int32 Score = 0;
+	int32 Hits = 0;
 
-	/** Best score this session. Saved leaderboard comes in a later stage. */
+	/** Points this Endless run: each hit's grade points times the combo multiplier. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
-	int32 HighScore = 0;
+	int32 Points = 0;
+
+	/** Current combo multiplier (1..MaxMultiplier). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 ComboMultiplier = 1;
+
+	/** PERFECT hits in a row (GOOD hits hold it, OK hits and mistakes reset it). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 PerfectStreak = 0;
+
+	/** Grade and points of the most recent hit (and LastHitTime), for the HUD's popup. In the
+	 *  tutorial the grade is still shown, but no points are scored. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	ESpinHitGrade LastHitGrade = ESpinHitGrade::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 LastHitPoints = 0;
+
+	/** World time a combo above x1 was lost, for the HUD. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float ComboLostTime = -1000.f;
+
+	/** The player's personal bests as they stood when this run started - what the run is chasing. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 BestLevel = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 BestPoints = 0;
+
+	/** World time this run's points first passed BestPoints (or -1000), for the HUD's flash. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float PassedBestPointsTime = -1000.f;
+
+	/** True if this run shortened its opening levels (see FastStartUnlockLevel). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bFastStart = false;
+
+	/** Name entry: what's been typed so far, and why the last confirm was refused (if it was). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	FString NameEntryText;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	FString NameEntryError;
+
+	/** Profile screen: the profile waiting for "delete? yes / no", or INDEX_NONE. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 PendingDeleteProfile = INDEX_NONE;
+
+	/** 1-based rank the last finished run got on each leaderboard, or 0 if it didn't make it. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 LastRunLevelRank = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 LastRunScoreRank = 0;
 
 	/** Which button (index into Prompts) the current zone requires. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -437,6 +592,14 @@ public:
 	/** Seconds left in the current invincibility window (see bInvincible). */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float InvincibleTimeRemaining = 0.f;
+
+	/** World time the last invincibility window ran out, used for the HUD's "GO!". */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float InvincibilityEndTime = -1000.f;
+
+	/** World time of the last successful hit (Endless or tutorial), used for the light pulse. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float LastHitTime = -1000.f;
 
 	/** Which kind of mistake caused the current (or most recent) life-lost pause screen. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -498,8 +661,19 @@ public:
 	/** Current Endless level, starting at 1. */
 	int32 GetLevel() const;
 
-	/** Total hits needed to finish the current Endless level (10, 20, 30, ...). */
+	/** Total hits needed to finish the current Endless level (10, 20, 30, ... - or fewer per
+	 *  level during a fast start). */
 	int32 GetLevelTarget() const;
+
+	/** Hits needed to clear one particular Endless level. */
+	int32 GetHitsForLevel(int32 Level) const;
+
+	/** What unlocks at an Endless level (obstacles, the second button, jams): a short title and a
+	 *  one-line how-to, joined if several land on the same level. False if nothing unlocks there. */
+	bool GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& OutHint) const;
+
+	/** The saved leaderboard (never null after StartPlay). */
+	const USpinSaveGame* GetSaveData() const;
 
 	/** How many buttons are in play right now. */
 	int32 GetNumActiveButtons() const;
@@ -519,6 +693,12 @@ public:
 	/** 1..0 fraction of the jam time limit that is left. */
 	float GetJamTimeFraction() const;
 
+	/** 1 right after a successful hit, fading to 0 over HitPulseDuration. Drives the light pulse. */
+	float GetHitPulse() const;
+
+	/** True once the game-over menu has been up long enough (RestartDelay) to accept input. */
+	bool IsGameOverMenuReady() const;
+
 	/** The in-world dial, spawned when play starts. */
 	ASpinClock* GetClock() const;
 
@@ -536,10 +716,28 @@ private:
 	void EndGame();
 	void ResumeAfterIntro();
 	void LoseLife();
+	void RegisterHit();
+	void QuitGame();
+
+	// Scoring / leaderboard
+	ESpinHitGrade GradeHit() const;
+	void ScoreHit(ESpinHitGrade Grade, float PointsScale);
+	void BreakCombo();
+	void LoadSaveData();
+	void WriteSaveData();
+	void RecordRun();
+
+	// Profiles
+	void OpenProfiles();
+	void BeginNameEntry(bool bThenPlay);
+
+	/** Name entry was opened from PLAY with no profile yet: continue to mode select once confirmed. */
+	bool bNameEntryThenPlay = false;
 
 	// Menus
 	void OpenModeSelect();
 	void OpenSettings();
+	void OpenLeaderboard();
 	void CloseMenus();
 	void InitSettingsFromCurrent();
 	void ApplyQuality();
@@ -569,6 +767,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<ASpinClock> Clock;
+
+	UPROPERTY()
+	TObjectPtr<USpinSaveGame> SaveData;
 
 	bool bHandWasInZone = false;
 	float GameOverTime = 0.f;

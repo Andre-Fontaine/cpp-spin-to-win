@@ -4,6 +4,7 @@
 #include "SpinGameMode.h"
 #include "SpinHUD.h"
 #include "Components/InputComponent.h"
+#include "InputKeyEventArgs.h"
 #include "Engine/World.h"
 
 ASpinPlayerController::ASpinPlayerController()
@@ -38,7 +39,12 @@ bool ASpinPlayerController::IsInMenuState() const
 	case ESpinState::WaitingToStart:
 	case ESpinState::ModeSelect:
 	case ESpinState::SettingsMenu:
+	case ESpinState::Leaderboard:
+	case ESpinState::ProfileSelect:
+	case ESpinState::NameEntry:
 	case ESpinState::MissPause:
+	case ESpinState::GameOver:
+	case ESpinState::TutorialComplete:
 		return true;
 	default:
 		return false;
@@ -66,13 +72,78 @@ bool ASpinPlayerController::TryHandleMenuClick()
 		{
 			if (Region.Action != EMenuAction::None && Region.Rect.IsInside(FVector2D(MouseX, MouseY)))
 			{
-				GM->HandleMenuAction(Region.Action);
+				GM->HandleMenuAction(Region.Action, Region.Index);
 				break;
 			}
 		}
 	}
 
 	return true;
+}
+
+bool ASpinPlayerController::InputKey(const FInputKeyEventArgs& Params)
+{
+	// While a name is being typed, the keyboard is a keyboard: every key goes to the name instead of
+	// the bindings below (otherwise typing W or D would also count as a button press). The mouse
+	// still reaches the OK / CANCEL buttons.
+	ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+	if (GM && GM->State == ESpinState::NameEntry && !Params.Key.IsMouseButton() && !Params.Key.IsGamepadKey())
+	{
+		if (Params.Event == IE_Pressed || Params.Event == IE_Repeat)
+		{
+			HandleNameKey(*GM, Params.Key, Params.Event == IE_Repeat);
+		}
+		return true;
+	}
+
+	return Super::InputKey(Params);
+}
+
+void ASpinPlayerController::HandleNameKey(ASpinGameMode& GM, const FKey& Key, bool bRepeat)
+{
+	// Holding a key only repeats the backspace - repeating letters is never what anyone wants here.
+	if (Key == EKeys::BackSpace || Key == EKeys::Delete)
+	{
+		GM.EraseNameChar();
+		return;
+	}
+	if (bRepeat)
+	{
+		return;
+	}
+
+	if (Key == EKeys::Enter)
+	{
+		GM.ConfirmName();
+	}
+	else if (Key == EKeys::Escape)
+	{
+		GM.CancelName();
+	}
+	else if (Key == EKeys::SpaceBar)
+	{
+		GM.TypeNameChar(TEXT(' '));
+	}
+	else
+	{
+		// Letters are named "A".."Z"; digits (top row and numpad) are spelled out.
+		static const FKey Digits[] = { EKeys::Zero, EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine };
+		static const FKey NumPadDigits[] = { EKeys::NumPadZero, EKeys::NumPadOne, EKeys::NumPadTwo, EKeys::NumPadThree, EKeys::NumPadFour, EKeys::NumPadFive, EKeys::NumPadSix, EKeys::NumPadSeven, EKeys::NumPadEight, EKeys::NumPadNine };
+		for (int32 i = 0; i < 10; ++i)
+		{
+			if (Key == Digits[i] || Key == NumPadDigits[i])
+			{
+				GM.TypeNameChar(static_cast<TCHAR>(TEXT('0') + i));
+				return;
+			}
+		}
+
+		const FString KeyName = Key.GetFName().ToString();
+		if (KeyName.Len() == 1 && FChar::IsAlpha(KeyName[0]))
+		{
+			GM.TypeNameChar(FChar::ToUpper(KeyName[0]));
+		}
+	}
 }
 
 void ASpinPlayerController::SetupInputComponent()

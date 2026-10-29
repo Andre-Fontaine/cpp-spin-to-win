@@ -149,6 +149,12 @@ void ASpinCityFX::SetupFlickerNodes()
 // Per-frame updates.
 // ---------------------------------------------------------------------------------------------
 
+float ASpinCityFX::GetHitPulse() const
+{
+	const ASpinGameMode* GM = GameMode.Get();
+	return GM ? GM->GetHitPulse() : 0.f;
+}
+
 void ASpinCityFX::UpdateGrid(float DeltaSeconds)
 {
 	if (GridMIDs.Num() == 0)
@@ -166,11 +172,14 @@ void ASpinCityFX::UpdateGrid(float DeltaSeconds)
 	const float Target = FMath::Lerp(GridMinIntensity, GridMaxIntensity, SpeedFactor);
 	CurrentGridIntensity = FMath::FInterpTo(CurrentGridIntensity, Target, DeltaSeconds, GridResponseSpeed);
 
+	// The hit pulse rides on top of the smoothed value, so it snaps in instantly instead of easing.
+	const float Intensity = CurrentGridIntensity + GridHitPulseBoost * GetHitPulse();
+
 	for (UMaterialInstanceDynamic* MID : GridMIDs)
 	{
 		if (MID)
 		{
-			MID->SetScalarParameterValue(IntensityParam, CurrentGridIntensity);
+			MID->SetScalarParameterValue(IntensityParam, Intensity);
 		}
 	}
 }
@@ -183,6 +192,7 @@ void ASpinCityFX::UpdateTraces()
 	}
 
 	const float T = GetWorld()->GetTimeSeconds() * ChaseSpeed;
+	const float PulseBoost = TraceHitPulseBoost * GetHitPulse();
 
 	for (FSpinTraceChain& Chain : TraceChains)
 	{
@@ -199,7 +209,7 @@ void ASpinCityFX::UpdateTraces()
 			float Dist = FMath::Abs(static_cast<float>(i) - Head);
 			Dist = FMath::Min(Dist, Count - Dist); // wrap-around distance, so the chase loops smoothly
 			const float Falloff = FMath::Clamp(1.f - Dist / ChaseWidth, 0.f, 1.f);
-			const float Intensity = FMath::Lerp(ChaseDimIntensity, ChaseBrightIntensity, Falloff);
+			const float Intensity = FMath::Lerp(ChaseDimIntensity, ChaseBrightIntensity, Falloff) + PulseBoost;
 
 			if (UMaterialInstanceDynamic* MID = Chain.Segments[i])
 			{
@@ -217,6 +227,7 @@ void ASpinCityFX::UpdateFlickerNodes()
 	}
 
 	const float Now = GetWorld()->GetTimeSeconds();
+	const float PulseBoost = NodeHitPulseBoost * GetHitPulse();
 
 	for (FSpinFlickerNode& Node : FlickerNodes)
 	{
@@ -228,15 +239,17 @@ void ASpinCityFX::UpdateFlickerNodes()
 		if (Node.FlashEndTime > 0.f && Now >= Node.FlashEndTime)
 		{
 			// Flash finished: drop back to idle and schedule the next one.
-			Node.MID->SetScalarParameterValue(IntensityParam, NodeDimIntensity);
 			Node.FlashEndTime = -1.f;
 			Node.NextFlashTime = Now + FMath::FRandRange(NodeFlickerMinInterval, NodeFlickerMaxInterval);
 		}
 		else if (Node.FlashEndTime <= 0.f && Now >= Node.NextFlashTime)
 		{
 			// Time to flash.
-			Node.MID->SetScalarParameterValue(IntensityParam, NodeBrightIntensity);
 			Node.FlashEndTime = Now + NodeFlashDuration;
 		}
+
+		// Set every frame (rather than only on flash changes) so the hit pulse can ride on top.
+		const float Base = (Node.FlashEndTime > 0.f) ? NodeBrightIntensity : NodeDimIntensity;
+		Node.MID->SetScalarParameterValue(IntensityParam, Base + PulseBoost);
 	}
 }

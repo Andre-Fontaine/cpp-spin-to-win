@@ -179,10 +179,12 @@ void ASpinClock::BuildVisuals()
 			Segment->SetMaterial(0, ZoneMID);
 		}
 
-		SparkMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+		// Sparks glow: the emissive neon material when it's available (pushed well past 1 so it
+		// blooms), otherwise the plain lit one.
+		SparkMID = UMaterialInstanceDynamic::Create(NeonMaterial ? NeonMaterial.Get() : BaseMaterial.Get(), this);
 		if (SparkMID)
 		{
-			SparkMID->SetVectorParameterValue(ColorParam, FLinearColor(1.f, 0.85f, 0.2f));
+			SparkMID->SetVectorParameterValue(ColorParam, NeonMaterial ? FLinearColor(6.f, 3.5f, 0.6f) : FLinearColor(1.f, 0.85f, 0.2f));
 		}
 		for (UStaticMeshComponent* Spark : SparkMeshes)
 		{
@@ -311,10 +313,17 @@ void ASpinClock::SetJammed(bool bNewJammed)
 
 void ASpinClock::UpdateSparks(float DeltaSeconds)
 {
-	// Emit new sparks from the hub while sparking.
+	// Everything is sized relative to the dial, so the sparks stay readable from the far-off camera
+	// however big the dial is (at the original 1-6 unit size they were about a pixel on screen).
+	const float SizeScale = DialRadius / 600.f;
+	const ASpinGameMode* GM = GameMode.Get();
+	const float HandAngleRad = GM ? FMath::DegreesToRadians(GM->HandAngle) : 0.f;
+	const float HandLength = DialRadius * HandLengthFraction;
+
+	// Emit new sparks along the whole hand while sparking - the bit the player is already watching.
 	if (bSparking)
 	{
-		SparkSpawnAccumulator += DeltaSeconds * 45.f; // sparks per second
+		SparkSpawnAccumulator += DeltaSeconds * 110.f; // sparks per second
 		while (SparkSpawnAccumulator >= 1.f)
 		{
 			SparkSpawnAccumulator -= 1.f;
@@ -323,11 +332,12 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 				if (S.Life <= 0.f)
 				{
 					S.Age = 0.f;
-					S.Life = FMath::FRandRange(0.25f, 0.55f);
-					S.Location = FVector(0.f, 0.f, 18.f);
+					S.Life = FMath::FRandRange(0.3f, 0.6f);
+					const float AlongHand = FMath::FRandRange(0.05f, 1.f) * HandLength;
+					S.Location = FVector(FMath::Cos(HandAngleRad) * AlongHand, FMath::Sin(HandAngleRad) * AlongHand, HandLift + 3.f + HandHeight);
 					const float Angle = FMath::FRandRange(0.f, 2.f * PI);
-					const float Speed = FMath::FRandRange(80.f, 260.f);
-					S.Velocity = FVector(FMath::Cos(Angle) * Speed, FMath::Sin(Angle) * Speed, FMath::FRandRange(120.f, 320.f));
+					const float Speed = FMath::FRandRange(120.f, 380.f) * SizeScale;
+					S.Velocity = FVector(FMath::Cos(Angle) * Speed, FMath::Sin(Angle) * Speed, FMath::FRandRange(200.f, 480.f) * SizeScale);
 					break;
 				}
 			}
@@ -356,7 +366,7 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 			continue;
 		}
 
-		S.Velocity.Z -= 700.f * DeltaSeconds; // gravity
+		S.Velocity.Z -= 1400.f * SizeScale * DeltaSeconds; // gravity
 		S.Location += S.Velocity * DeltaSeconds;
 		if (S.Location.Z < 2.f)
 		{
@@ -364,7 +374,7 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 			S.Velocity.Z = FMath::Abs(S.Velocity.Z) * 0.3f;
 		}
 
-		const float Size = 5.f * (1.f - S.Age / S.Life) + 1.f;
+		const float Size = (14.f * (1.f - S.Age / S.Life) + 4.f) * SizeScale;
 		Mesh->SetVisibility(true);
 		Mesh->SetRelativeLocation(S.Location);
 		Mesh->SetRelativeScale3D(FVector(Size / 100.f));
@@ -430,10 +440,25 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 		ZoneMID->SetVectorParameterValue(ColorParam, ZoneColor);
 	}
 
+	// Successful hits flare the rings and the fill light, then fade back (the city does the same,
+	// see ASpinCityFX).
+	const float Pulse = GM.GetHitPulse();
+	const float RingGlow = 1.f + RingHitPulseBoost * Pulse;
+
 	if (OuterRingMID)
 	{
 		// The whole rim glows the colour of whichever button the next zone needs.
-		OuterRingMID->SetVectorParameterValue(ColorParam, ZoneBase);
+		OuterRingMID->SetVectorParameterValue(ColorParam, ZoneBase * RingGlow);
+	}
+
+	if (InnerRingMID)
+	{
+		InnerRingMID->SetVectorParameterValue(ColorParam, InnerRingColor * RingGlow);
+	}
+
+	if (FillLight)
+	{
+		FillLight->SetIntensity(FillLightIntensity * (1.f + FillLightHitPulseBoost * Pulse));
 	}
 
 	if (HandMID)
@@ -447,6 +472,12 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 		else if (bJammed)
 		{
 			HandColor = FLinearColor(0.75f, 0.3f, 0.08f); // broken: orange-brown
+		}
+		else if (bSparking)
+		{
+			// Overheating: flickers between white and hot orange, faster than any other hand state.
+			const float Flicker = 0.5f + 0.5f * FMath::Sin(GetWorld()->GetTimeSeconds() * 30.f);
+			HandColor = FMath::Lerp(FLinearColor::White, FLinearColor(1.f, 0.35f, 0.05f), Flicker);
 		}
 		else if (IsHandRaised())
 		{

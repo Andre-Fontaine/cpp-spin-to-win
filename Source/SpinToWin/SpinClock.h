@@ -94,7 +94,7 @@ public:
 
 	// ---------------- Jam ----------------
 
-	/** Sparks shoot from where the hand meets the hub. */
+	/** Sparks shower off the whole hand (and it flickers hot orange) as a jam warning. */
 	void SetSparking(bool bSparking);
 
 	/** A jammed hand tilts and turns orange-brown ("broken") while it keeps spinning. */
@@ -144,6 +144,14 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
 	FLinearColor InnerRingColor = FLinearColor(0.1f, 0.9f, 1.f);
+
+	/** At the peak of a successful hit's pulse, both rings' glow is multiplied by 1 + this. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	float RingHitPulseBoost = 6.f;
+
+	/** At the peak of a successful hit's pulse, the fill light is multiplied by 1 + this. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	float FillLightHitPulseBoost = 1.5f;
 
 	// ---------------- Lift tuning ----------------
 
@@ -220,7 +228,7 @@ private:
 
 	static constexpr int32 NumZoneSegments = 48;
 	static constexpr int32 NumObstacleSlots = 4;
-	static constexpr int32 NumSparks = 40;
+	static constexpr int32 NumSparks = 80;
 	static constexpr int32 NumRingSegments = 90;
 
 	UPROPERTY()

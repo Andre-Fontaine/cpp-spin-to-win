@@ -113,6 +113,20 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "CityFX|Nodes")
 	float NodeFlashDuration = 0.18f;
 
+	// ---------------- Hit pulse ----------------
+
+	/** On every successful hit, the whole city flares up and fades back (see the game mode's
+	 *  HitPulseDuration). Each value is how much is added on top of the normal brightness at the
+	 *  peak of the pulse. */
+	UPROPERTY(EditDefaultsOnly, Category = "CityFX|HitPulse")
+	float GridHitPulseBoost = 14.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "CityFX|HitPulse")
+	float TraceHitPulseBoost = 10.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "CityFX|HitPulse")
+	float NodeHitPulseBoost = 10.f;
+
 private:
 	void SetupGridMIDs();
 	void SetupTraceChains();
@@ -121,6 +135,9 @@ private:
 	void UpdateGrid(float DeltaSeconds);
 	void UpdateTraces();
 	void UpdateFlickerNodes();
+
+	/** 0..1 hit pulse from the game mode (0 if there isn't one). */
+	float GetHitPulse() const;
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
