@@ -245,7 +245,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 
 	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * Dt + 360.f, 360.f);
 
-	// Invincibility window after resuming from a life-lost pause: the hand keeps moving, but
+	// Invincibility window after losing a life: the hand keeps moving, but
 	// nothing can go wrong (and nothing can be hit) until the timer runs out.
 	if (bInvincible)
 	{
@@ -290,7 +290,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		}
 		else
 		{
-			FailAndPause(ESpinMistake::HitObstacle); // ran into an obstacle without lifting the hand over it
+			Fail(ESpinMistake::HitObstacle); // ran into an obstacle without lifting the hand over it
 			return;
 		}
 	}
@@ -366,15 +366,8 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		// Typing goes through TypeNameChar instead - the player controller intercepts the keyboard.
 		break;
 
-	case ESpinState::MissPause:
-		if (ButtonIndex == 0)
-		{
-			ResumeAfterMiss();
-		}
-		break;
-
 	case ESpinState::Playing:
-		// Invincibility window after resuming from a life-lost pause: nothing can be hit and
+		// Invincibility window after losing a life: nothing can be hit and
 		// nothing can go wrong, so presses are completely ignored until the timer runs out.
 		if (bInvincible)
 		{
@@ -409,7 +402,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		}
 		else
 		{
-			FailAndPause(ESpinMistake::WrongButton); // too early, or the wrong button
+			Fail(ESpinMistake::WrongButton); // too early, or the wrong button
 		}
 		break;
 
@@ -964,7 +957,6 @@ void ASpinGameMode::OnHit()
 	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
 	{
 		LevelUpTime = GetWorld()->GetTimeSeconds();
-		Shake(LevelUpShake);
 	}
 
 	Shake(HitShake);
@@ -1002,19 +994,16 @@ void ASpinGameMode::OnHit()
 	{
 		// Pause and wait for the player to press the new button.
 		State = ESpinState::NewButtonIntro;
-		Shake(LevelUpShake);
 	}
 	else if (bObstacleIntro)
 	{
 		// Obstacles just unlocked: pause until the player holds the lift button.
 		State = ESpinState::ObstacleIntro;
-		Shake(LevelUpShake);
 	}
 	else if (bJamIntro)
 	{
 		// Jams can happen from here on: explain the warning signs and the fix before the first one.
 		State = ESpinState::JamIntro;
-		Shake(LevelUpShake);
 	}
 }
 
@@ -1046,10 +1035,10 @@ bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& Ou
 
 void ASpinGameMode::OnZoneMissed()
 {
-	FailAndPause(ESpinMistake::MissedZone);
+	Fail(ESpinMistake::MissedZone);
 }
 
-void ASpinGameMode::FailAndPause(ESpinMistake Mistake)
+void ASpinGameMode::Fail(ESpinMistake Mistake)
 {
 	LastMistake = Mistake;
 	Shake(LifeLostShake);
@@ -1057,8 +1046,8 @@ void ASpinGameMode::FailAndPause(ESpinMistake Mistake)
 	BreakCombo();
 
 	// Obstacle hits spend the regenerating "Lives" pool; everything else spends the
-	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise the
-	// player just sees a pause screen and confirms to continue at their current level/score.
+	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise play
+	// carries straight on at the current level/score.
 	if (Mistake == ESpinMistake::HitObstacle)
 	{
 		Lives = FMath::Max(0, Lives - 1);
@@ -1093,26 +1082,30 @@ void ASpinGameMode::FailAndPause(ESpinMistake Mistake)
 			return;
 		}
 
-		// The jam that broke the hand is fixed as part of the pause - the player is not left
-		// looking at a still-jammed hand once they continue.
+		// The jam that broke the hand is fixed on the spot - the player is not left looking at a
+		// still-jammed hand.
 		if (Mistake == ESpinMistake::HandBroke)
 		{
 			ResetJam();
 		}
+
+		// No pause: straight into the invincibility countdown to get back in rhythm. Obstacle hits
+		// skip this - the obstacle is cleared below and play simply carries on.
+		bInvincible = true;
+		InvincibleTimeRemaining = InvincibilityDuration;
+		InvincibilityEndTime = -1000.f;
 	}
 
-	// Pause: the player sees they lost a life and confirms before the hand moves again.
-	State = ESpinState::MissPause;
-}
+	switch (Mistake)
+	{
+	case ESpinMistake::MissedZone:  ShowNotice(TEXT("You missed the zone!")); break;
+	case ESpinMistake::WrongButton: ShowNotice(TEXT("Wrong button, or too early!")); break;
+	case ESpinMistake::HitObstacle: ShowNotice(TEXT("You hit an obstacle!")); break;
+	case ESpinMistake::HandBroke:   ShowNotice(TEXT("The hand broke free!")); break;
+	default: break;
+	}
 
-void ASpinGameMode::ResumeAfterMiss()
-{
-	State = ESpinState::Playing;
-	bInvincible = true;
-	InvincibleTimeRemaining = InvincibilityDuration;
-	bHandWasInZone = false;
-
-	// A clean slate to get re-oriented: nothing left over to dodge.
+	// A clean slate: nothing left over to dodge (and the obstacle just hit can't hit again).
 	if (Clock)
 	{
 		Clock->RetireObstacles();
@@ -1250,8 +1243,6 @@ void ASpinGameMode::OnTutorialHit()
 	// Level finished.
 	if (TutorialHits >= Level->Hits)
 	{
-		Shake(LevelUpShake);
-
 		if (TutorialIndex + 1 < TutorialLevels.Num())
 		{
 			BeginTutorialLevel(TutorialIndex + 1);
@@ -1502,13 +1493,6 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		ApplyVolume();
 		break;
 
-	case EMenuAction::ContinueAfterMiss:
-		if (State == ESpinState::MissPause)
-		{
-			ResumeAfterMiss();
-		}
-		break;
-
 	case EMenuAction::RetryGame:
 		if (IsGameOverMenuReady())
 		{
@@ -1675,7 +1659,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 		}
 		else
 		{
-			FailAndPause(ESpinMistake::HandBroke);
+			Fail(ESpinMistake::HandBroke);
 		}
 	}
 }

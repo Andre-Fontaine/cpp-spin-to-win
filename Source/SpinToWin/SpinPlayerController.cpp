@@ -42,7 +42,6 @@ bool ASpinPlayerController::IsInMenuState() const
 	case ESpinState::Leaderboard:
 	case ESpinState::ProfileSelect:
 	case ESpinState::NameEntry:
-	case ESpinState::MissPause:
 	case ESpinState::GameOver:
 	case ESpinState::TutorialComplete:
 		return true;

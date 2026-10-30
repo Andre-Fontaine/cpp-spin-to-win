@@ -49,18 +49,6 @@ namespace
 		return Color;
 	}
 
-	FString GetMistakeMessage(ESpinMistake Mistake)
-	{
-		switch (Mistake)
-		{
-		case ESpinMistake::MissedZone:  return TEXT("You missed the zone!");
-		case ESpinMistake::WrongButton: return TEXT("Wrong button, or too early!");
-		case ESpinMistake::HitObstacle: return TEXT("You hit an obstacle!");
-		case ESpinMistake::HandBroke:   return TEXT("The hand broke free!");
-		default:                        return FString();
-		}
-	}
-
 	/** 12345 -> "12,345". */
 	FString FormatPoints(int32 Value)
 	{
@@ -138,7 +126,6 @@ void ASpinHUD::DrawHUD()
 	case ESpinState::ProfileSelect:    DrawProfileSelect(*GM); break;
 	case ESpinState::NameEntry:        DrawNameEntry(*GM); break;
 	case ESpinState::Playing:          DrawRunHUD(*GM); break;
-	case ESpinState::MissPause:        DrawMissPause(*GM); break;
 	case ESpinState::GameOver:         DrawGameOver(*GM); break;
 	case ESpinState::TutorialComplete: DrawTutorialComplete(*GM); break;
 
@@ -540,17 +527,14 @@ void ASpinHUD::DrawRunHUD(const ASpinGameMode& GM)
 	DrawCallout(GM, CX, U(196.f));
 	DrawHitPopup(GM, CX, CY - U(150.f));
 
-	// Invincibility countdown, then "GO!" - skipped after an obstacle hit, whose own feedback is enough.
-	if (GM.LastMistake != ESpinMistake::HitObstacle)
+	// Invincibility countdown, then "GO!" (obstacle hits don't start one).
+	if (GM.bInvincible)
 	{
-		if (GM.bInvincible)
-		{
-			DrawInvincibilityCountdown(GM.InvincibleTimeRemaining, CX, CY);
-		}
-		else
-		{
-			DrawGo(Now - GM.InvincibilityEndTime, CX, CY);
-		}
+		DrawInvincibilityCountdown(GM.InvincibleTimeRemaining, CX, CY);
+	}
+	else
+	{
+		DrawGo(Now - GM.InvincibilityEndTime, CX, CY);
 	}
 }
 
@@ -1140,7 +1124,7 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 	const float CardW = FMath::Min(U(400.f), (ScreenW - U(Margin) * 2.f - Gap) * 0.5f);
 	const float CardH = U(260.f);
 
-	auto DrawCard = [&](float X, const FString& Title, const FLinearColor& Accent, const FString& Description, const FString& Extra, const FString& Key, EMenuAction Action)
+	auto DrawCard = [&](float X, const FString& Title, const FLinearColor& Accent, const FString& Description, const FString& Key, EMenuAction Action)
 	{
 		DrawPanel(X, Y, CardW, CardH, Accent);
 		if (IsHovered(X, Y, CardW, CardH))
@@ -1151,11 +1135,7 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 		float LineY = Y + U(26.f);
 		DrawLabel(Title, X + CardW * 0.5f, LineY, TitleSize, Accent, ESpinTextAlign::Center, true);
 		LineY += LineH(TitleSize) + U(8.f);
-		LineY = DrawWrapped(Description, X + CardW * 0.5f, LineY, BodySize, TextDim, CardW - U(48.f));
-		if (!Extra.IsEmpty())
-		{
-			DrawLabel(Extra, X + CardW * 0.5f, LineY + U(10.f), SmallSize, Gold, ESpinTextAlign::Center, true);
-		}
+		DrawWrapped(Description, X + CardW * 0.5f, LineY, BodySize, TextDim, CardW - U(48.f));
 
 		DrawKeyPrompt(TEXT("Click or press"), Key, FString(), X + CardW * 0.5f, Y + CardH - U(22.f) - KeyCapHeight(SmallSize), SmallSize, Accent);
 		AddRegion(X, Y, CardW, CardH, Action);
@@ -1173,13 +1153,21 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 
 	DrawCard(CX - Gap * 0.5f - CardW, TEXT("TUTORIAL"), KeyColorOf(GM, 0),
 		FString::Printf(TEXT("Learn the ropes in %d short stages. Nothing can go wrong here."), GM.TutorialLevels.Num()),
-		FString(), KeyHintOf(GM, 0), EMenuAction::StartTutorial);
+		KeyHintOf(GM, 0), EMenuAction::StartTutorial);
 	DrawCard(CX + Gap * 0.5f, TEXT("ENDLESS"), KeyColorOf(GM, 1),
 		TEXT("The real run. The hand speeds up, new mechanics unlock, and mistakes cost lives."),
-		BestLine, KeyHintOf(GM, 1), EMenuAction::StartEndless);
+		KeyHintOf(GM, 1), EMenuAction::StartEndless);
+	Y += CardH + U(32.f);
+
+	// The Endless best gets its own line under the cards, clear of the key prompts.
+	if (!BestLine.IsEmpty())
+	{
+		DrawLabel(BestLine, CX, Y, SmallSize, Gold, ESpinTextAlign::Center, true);
+		Y += LineH(SmallSize) + U(24.f);
+	}
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y + CardH + U(32.f), BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
+	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
 }
 
 void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
@@ -1448,73 +1436,6 @@ void ASpinHUD::DrawNameEntry(const ASpinGameMode& GM)
 	const float Gap = U(20.f);
 	DrawMenuButton(CX - Gap * 0.5f - BtnW, Y, BtnW, BtnH, TEXT("OK"), EMenuAction::ConfirmName, Green);
 	DrawMenuButton(CX + Gap * 0.5f, Y, BtnW, BtnH, TEXT("CANCEL"), EMenuAction::CancelName, TextDim);
-}
-
-void ASpinHUD::DrawMissPause(const ASpinGameMode& GM)
-{
-	DrawBackdrop(0.78f);
-
-	const float CX = ScreenW * 0.5f;
-	const float CardW = FMath::Min(U(660.f), ScreenW - U(Margin) * 2.f);
-	const float P = U(32.f);
-
-	// Which pool paid for it.
-	const bool bObstacle = GM.LastMistake == ESpinMistake::HitObstacle;
-	const int32 Left = bObstacle ? GM.Lives : GM.MissLives;
-	const int32 Max = bObstacle ? GM.MaxLives : GM.MaxMissLives;
-	const FLinearColor PoolColor = bObstacle ? Red : Orange;
-	const TCHAR* PoolName = bObstacle ? TEXT("LIVES") : TEXT("MISSES");
-	const TCHAR* PoolNote = bObstacle ? TEXT("+1 per obstacle hopped") : TEXT("no refills");
-
-	const TArray<FString> InfoLines = WrapText(FString::Printf(TEXT("Continue for %.0f seconds of invincibility to get back in rhythm."), GM.InvincibilityDuration),
-		SmallSize, false, CardW - P * 2.f);
-
-	const float Pip = U(28.f);
-	const float BtnH = U(62.f);
-	const float CardH = P + LineH(TitleSize) + U(6.f) + LineH(HeadingSize) + U(26.f) + Pip + U(10.f) + LineH(SmallSize) + U(18.f)
-		+ InfoLines.Num() * LineH(SmallSize) + U(24.f) + BtnH + P;
-	const float X = CX - CardW * 0.5f;
-	float Y = (ScreenH - CardH) * 0.5f;
-	DrawPanel(X, Y, CardW, CardH, Red);
-	Y += P;
-
-	DrawLabel(TEXT("LIFE LOST"), CX, Y, TitleSize, Red, ESpinTextAlign::Center, true);
-	Y += LineH(TitleSize) + U(6.f);
-	DrawLabel(GetMistakeMessage(GM.LastMistake), CX, Y, HeadingSize, TextMain, ESpinTextAlign::Center);
-	Y += LineH(HeadingSize) + U(26.f);
-
-	// The pool, big: "MISSES  [#][#][ ]".
-	const float PipGap = U(8.f);
-	const float LabelW = MeasureText(PoolName, BodySize, true).X + U(18.f);
-	const float PipsW = Max * Pip + (Max - 1) * PipGap;
-	const float RowX = CX - (LabelW + PipsW) * 0.5f;
-	DrawLabel(PoolName, RowX, Y + (Pip - LineH(BodySize)) * 0.5f, BodySize, PoolColor, ESpinTextAlign::Left, true);
-	for (int32 i = 0; i < Max; ++i)
-	{
-		const float PX = RowX + LabelW + i * (Pip + PipGap);
-		if (i < Left)
-		{
-			DrawRect(PoolColor, PX, Y, Pip, Pip);
-		}
-		else
-		{
-			DrawRect(TrackColor, PX, Y, Pip, Pip);
-			DrawOutline(PX, Y, Pip, Pip, Fade(PoolColor, 0.4f), FMath::Max(1.f, U(1.f)));
-		}
-	}
-	Y += Pip + U(10.f);
-	DrawLabel(FString::Printf(TEXT("%d / %d left  -  %s"), Left, Max, PoolNote), CX, Y, SmallSize, TextDim, ESpinTextAlign::Center);
-	Y += LineH(SmallSize) + U(18.f);
-
-	for (const FString& Line : InfoLines)
-	{
-		DrawLabel(Line, CX, Y, SmallSize, TextDim, ESpinTextAlign::Center);
-		Y += LineH(SmallSize);
-	}
-	Y += U(24.f);
-
-	const float BtnW = FMath::Min(U(320.f), CardW - P * 2.f);
-	DrawMenuButton(CX - BtnW * 0.5f, Y, BtnW, BtnH, TEXT("CONTINUE"), EMenuAction::ContinueAfterMiss, Green, KeyLabelOf(GM, 0));
 }
 
 void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)

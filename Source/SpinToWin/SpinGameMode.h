@@ -32,17 +32,13 @@ enum class ESpinState : uint8
 	ObstacleIntro,
 	/** Endless: paused on the "jams" screen (first time jams can happen) until the player presses the first button. */
 	JamIntro,
-	/** Endless: paused after any life-costing mistake (missed zone, wrong button, obstacle hit,
-	 *  or a jam that broke the hand), until the player confirms to continue. */
-	MissPause,
 	/** Tutorial: paused on a level's explanation screen until the player presses its confirm button. */
 	TutorialIntro,
 	/** Tutorial finished. */
 	TutorialComplete
 };
 
-/** What kind of mistake triggered the life-lost pause screen (ESpinState::MissPause), purely so
- *  the HUD can show the right message and the right life pool. */
+/** What kind of mistake last cost a life, so the right message and feedback can be shown. */
 UENUM(BlueprintType)
 enum class ESpinMistake : uint8
 {
@@ -87,7 +83,6 @@ enum class EMenuAction : uint8
 	ResolutionNext,
 	VolumeDown,
 	VolumeUp,
-	ContinueAfterMiss,
 	RetryGame,
 	ReturnToMainMenu,
 	QuitGame,
@@ -439,8 +434,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float RestartDelay = 1.f;
 
-	/** Seconds of invincibility after confirming a life-lost pause screen - obstacles, zone
-	 *  misses, jams, and button presses are all ignored until this runs out. */
+	/** Seconds of invincibility (with a countdown) after losing a miss life - obstacles, zone
+	 *  misses, jams, and button presses are all ignored until this runs out. Obstacle hits don't
+	 *  trigger it. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
 	float InvincibilityDuration = 5.f;
 
@@ -449,10 +445,6 @@ public:
 	/** Small shake on every successful hit. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
 	float HitShake = 0.15f;
-
-	/** Medium shake on a level-up. */
-	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
-	float LevelUpShake = 0.4f;
 
 	/** Big shake when the run ends. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Feel", meta = (ClampMin = "0", ClampMax = "1"))
@@ -583,7 +575,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bOutOfMissLives = false;
 
-	/** True during the invincibility window after confirming a life-lost pause screen (see
+	/** True during the invincibility window after losing a miss life (see
 	 *  InvincibilityDuration): zones, obstacles, jams, and button presses are all ignored, giving
 	 *  the player a few seconds to get re-oriented with the hand before play resumes for real. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -601,7 +593,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float LastHitTime = -1000.f;
 
-	/** Which kind of mistake caused the current (or most recent) life-lost pause screen. */
+	/** Which kind of mistake most recently cost a life. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	ESpinMistake LastMistake = ESpinMistake::None;
 
@@ -711,8 +703,9 @@ private:
 	void StartGame();
 	void OnHit();
 	void OnZoneMissed();
-	void FailAndPause(ESpinMistake Mistake);
-	void ResumeAfterMiss();
+	/** A life-costing mistake: spends a life from the right pool, then either ends the run or
+	 *  carries straight on (with the invincibility countdown, unless it was an obstacle hit). */
+	void Fail(ESpinMistake Mistake);
 	void EndGame();
 	void ResumeAfterIntro();
 	void LoseLife();

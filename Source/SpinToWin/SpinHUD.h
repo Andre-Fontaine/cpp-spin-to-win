@@ -161,7 +161,6 @@ private:
 	void DrawLeaderboard(const ASpinGameMode& GM);
 	void DrawProfileSelect(const ASpinGameMode& GM);
 	void DrawNameEntry(const ASpinGameMode& GM);
-	void DrawMissPause(const ASpinGameMode& GM);
 	void DrawGameOver(const ASpinGameMode& GM);
 	void DrawTutorialComplete(const ASpinGameMode& GM);
 
