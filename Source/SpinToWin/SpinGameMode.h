@@ -14,8 +14,10 @@ enum class ESpinState : uint8
 {
 	/** Main menu: PLAY / SETTINGS. */
 	WaitingToStart,
-	/** PLAY was chosen: pick TUTORIAL or ENDLESS. */
+	/** PLAY was chosen: pick TUTORIAL, ENDLESS or DAILY. */
 	ModeSelect,
+	/** ENDLESS was chosen: toggle run modifiers, then start. */
+	ModifierSelect,
 	/** SETTINGS was chosen: graphics quality, resolution, and volume. */
 	SettingsMenu,
 	/** LEADERBOARD was chosen: the saved best runs, by level and by score. */
@@ -76,7 +78,13 @@ enum class EMenuAction : uint8
 	OpenLeaderboard,
 	Back,
 	StartTutorial,
+	/** Starts an Endless run with the selected modifiers. */
 	StartEndless,
+	/** From mode select: opens the modifier screen before an Endless run. */
+	OpenModifiers,
+	/** Index = which ESpinModifier to switch on or off. */
+	ToggleModifier,
+	StartDaily,
 	QualityPrev,
 	QualityNext,
 	ResolutionPrev,
@@ -107,6 +115,33 @@ enum class ESpinMode : uint8
 	Tutorial,
 	/** The real game. Mistakes cost lives or end the run. */
 	Endless
+};
+
+/** Optional rules for an Endless run. Each one makes the run harder and multiplies its points.
+ *  Stored as bit flags (1 << value) in a run's modifier mask. */
+UENUM(BlueprintType)
+enum class ESpinModifier : uint8
+{
+	/** The hand starts a good deal faster. */
+	FastHand,
+	/** Target zones are much narrower. */
+	TinyZones,
+	/** After a hit the hand only sometimes reverses, so you can't count on the next direction. */
+	WildSpin,
+	/** Jams can happen from level 1, and more often. */
+	EarlyJams,
+	/** One obstacle life and one miss life: any mistake ends the run. */
+	OneLife,
+	Count UMETA(Hidden)
+};
+
+/** Display info and scoring for one modifier, see ASpinGameMode::GetModifierInfo. */
+struct FSpinModifierInfo
+{
+	const TCHAR* Name;
+	const TCHAR* Description;
+	/** Points multiplier while it's on. Several multiply together. */
+	float PointsMultiplier;
 };
 
 UENUM(BlueprintType)
@@ -561,6 +596,25 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bFastStart = false;
 
+	/** True if this run is today's daily challenge: same seed and modifier for everyone today. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bDailyRun = false;
+
+	/** Modifiers in effect this run (bit mask of 1 << ESpinModifier), and their combined points multiplier. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 RunModifiers = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float RunPointsMultiplier = 1.f;
+
+	/** The modifiers picked on the modifier screen for the next Endless run (saved). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 SelectedModifiers = 0;
+
+	/** 1-based rank the last finished daily run got on today's board, or 0. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 LastRunDailyRank = 0;
+
 	/** Name entry: what's been typed so far, and why the last confirm was refused (if it was). */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	FString NameEntryText;
@@ -723,6 +777,32 @@ public:
 	/** The saved leaderboard (never null after StartPlay). */
 	const USpinSaveGame* GetSaveData() const;
 
+	// ---------------- Modifiers and the daily challenge ----------------
+
+	static const FSpinModifierInfo& GetModifierInfo(ESpinModifier Modifier);
+
+	/** Combined points multiplier of a modifier mask (1 for none). */
+	static float GetModifiersMultiplier(int32 Mask);
+
+	/** "TINY ZONES + ONE LIFE", or empty for none. */
+	static FString GetModifierNames(int32 Mask);
+
+	/** True if this modifier is in effect for the current run. */
+	bool HasModifier(ESpinModifier Modifier) const;
+
+	/** Today's date as YYYYMMDD (local time): the daily challenge's id and seed. */
+	static int32 GetTodayKey();
+
+	/** Today's daily modifier mask - one modifier, picked from the date. */
+	static int32 GetDailyModifiers();
+
+	/** The active player's best score in today's daily challenge, or 0. */
+	int32 GetDailyBest() const;
+
+	/** Lives this run starts with (and can be topped back up to) - fewer with some modifiers. */
+	int32 GetRunMaxLives() const;
+	int32 GetRunMaxMissLives() const;
+
 	/** How many buttons are in play right now. */
 	int32 GetNumActiveButtons() const;
 
@@ -756,7 +836,16 @@ private:
 	void ShowNotice(const FString& Text);
 
 	// Endless
-	void StartGame();
+	/** Starts an Endless run: today's daily challenge, or a normal run with SelectedModifiers. */
+	void StartGame(bool bDaily = false);
+	void OpenModifiers();
+
+	/** Run tuning with this run's modifiers applied. */
+	float GetRunStartSpeed() const;
+	float GetRunStartZoneHalfWidth() const;
+	float GetRunMinZoneHalfWidth() const;
+	int32 GetRunJamStartLevel() const;
+	float GetRunJamChance() const;
 	void OnHit();
 	void OnZoneMissed();
 	/** A life-costing mistake: spends a life from the right pool, then either ends the run or
@@ -824,6 +913,15 @@ private:
 
 	/** Whether the last input came from a gamepad (InputStyle then follows bPlayStationIcons). */
 	bool bUsingGamepad = false;
+
+	/** All gameplay randomness (zones, buttons, obstacles, jams) comes from this stream. It's
+	 *  re-seeded from RunSeed and the hit count on every hit, so for a given seed, hit N always
+	 *  rolls the same - which is what makes the daily challenge the same run for everyone. */
+	FRandomStream RunRandom;
+	int32 RunSeed = 0;
+
+	/** The day (YYYYMMDD) a daily run was started on - its board, even if it ends after midnight. */
+	int32 RunDayKey = 0;
 
 	/** Fraction of a point the lift has cost but not yet taken off the score. */
 	float LiftPointsDebt = 0.f;

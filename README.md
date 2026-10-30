@@ -2,15 +2,15 @@
 
 A simple reflex game built with Unreal Engine 5.8 and C++.
 
-A clock-style hand sweeps around a dial. Press the right button while the hand is inside the target zone and it reverses direction, speeds up, and a new, slightly smaller zone appears. Every mistake - missing a zone, pressing the wrong button, running into an obstacle, or failing to fix a jam in time - costs a life and pauses the run so you can confirm and get a few seconds of invincibility to settle back in. Run out of lives and a game-over menu lets you retry, head back to the main menu, or quit. How far can you get?
+A clock-style hand sweeps around a dial. Press the right button while the hand is inside the target zone and it reverses direction, speeds up, and a new, slightly smaller zone appears. Every mistake - missing a zone, pressing the wrong button, running into an obstacle, or failing to fix a jam in time - costs a life; most mistakes then give you a few seconds of invincibility to settle back in. Run out of lives and a game-over menu lets you retry, head back to the main menu, or quit. How far can you get?
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| W / Gamepad A (Xbox) or X (PlayStation) | Hit the first zone, confirm menus/prompts |
+| W / Gamepad A (Xbox) or X (PlayStation) | Hit the first zone, confirm menus/prompts (Tutorial on mode select) |
 | D / Gamepad B (Xbox) or O (PlayStation) | Hit the second zone (unlocks at level 4), confirm menus/prompts |
-| A / Gamepad X (Xbox) or Square (PlayStation) | Hit the third zone (unlocks at level 6) |
+| A / Gamepad X (Xbox) or Square (PlayStation) | Hit the third zone (unlocks at level 6), Daily on mode select |
 | Hold Left Click / Right Trigger | Raise the hand over an obstacle (costs points while up, drops after one full turn) |
 | Mouse | Click buttons on the main menu, mode select, settings, and pause screens |
 
@@ -19,7 +19,8 @@ On-screen button prompts follow whichever device you used last (keyboard or game
 ## Modes
 
 - **Tutorial** - 7 short, unfailable levels that introduce the zone, the second button, obstacles/the lift, and jams one at a time.
-- **Endless** - the real run. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life and pause the run rather than ending it outright - the run only ends when you're out of lives. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
+- **Endless** - the real run. Before it starts you can switch on optional modifiers (Fast Hand, Tiny Zones, Wild Spin, Early Jams, One Life); each makes the run harder and multiplies every point scored, and boosted runs are tagged on the leaderboard. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life rather than ending the run outright - it only ends when you're out of lives. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
+- **Daily** - one run a day that is the same for everyone: a seed and a "twist" modifier picked from the date. Retry as often as you like; your best counts on a separate daily board that starts over each day.
 
 ## Status
 
@@ -30,13 +31,15 @@ Early prototype.
 - [x] Obstacles, the lift, and a regenerating life pool
 - [x] Jams that need mashing to fix before the hand breaks
 - [x] Non-regenerating "miss" lives for missed/mistimed zones, separate from obstacle lives
-- [x] Mistake recovery: pause, confirm, then a few seconds of invincibility instead of an instant game over
+- [x] Mistake recovery: a few seconds of invincibility instead of an instant game over
 - [x] Tutorial mode
 - [x] Main menu (Play / Settings), mode select, and a settings screen (quality, resolution, volume, Xbox or PlayStation controller icons)
 - [x] Precision scoring (PERFECT / GOOD / OK) with a combo multiplier for PERFECT streaks
 - [x] Saved local leaderboard, ranked two ways: highest level and highest score
 - [x] Player profiles: pick or add a player on the main menu; runs go on the shared leaderboard under their name, and personal bests are tracked per player
 - [x] Fast start: once you have reached level 5, the opening levels of each run go by quicker
+- [x] Run modifiers with score multipliers
+- [x] Daily challenge with its own board
 - [ ] Online leaderboard
 
 ## About this repo

@@ -157,6 +157,7 @@ private:
 
 	void DrawMainMenu(const ASpinGameMode& GM);
 	void DrawModeSelect(const ASpinGameMode& GM);
+	void DrawModifierSelect(const ASpinGameMode& GM);
 	void DrawSettings(const ASpinGameMode& GM);
 	void DrawLeaderboard(const ASpinGameMode& GM);
 	void DrawProfileSelect(const ASpinGameMode& GM);

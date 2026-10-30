@@ -28,6 +28,7 @@ namespace
 	const FLinearColor Green(0.35f, 1.f, 0.5f);   // good things: +1, repair, GO
 	const FLinearColor Orange(1.f, 0.58f, 0.14f); // warnings, miss lives, unlocks
 	const FLinearColor Red(1.f, 0.3f, 0.32f);     // danger, obstacle lives, game over
+	const FLinearColor Purple(0.78f, 0.45f, 1.f); // run modifiers and the daily challenge
 
 	// ---- Type scale, in points at 1080p. ----
 	constexpr float HeroSize = 72.f;
@@ -46,6 +47,18 @@ namespace
 	{
 		Color.A *= FMath::Clamp(Alpha, 0.f, 1.f);
 		return Color;
+	}
+
+	/** 1.5 -> "x1.5", 2 -> "x2", 1.25 -> "x1.25". */
+	FString FormatMultiplier(float Value)
+	{
+		FString Text = FString::Printf(TEXT("%.2f"), Value);
+		while (Text.EndsWith(TEXT("0")))
+		{
+			Text.LeftChopInline(1);
+		}
+		Text.RemoveFromEnd(TEXT("."));
+		return TEXT("x") + Text;
 	}
 
 	/** 12345 -> "12,345". */
@@ -114,6 +127,7 @@ void ASpinHUD::DrawHUD()
 	{
 	case ESpinState::WaitingToStart:   DrawMainMenu(*GM); break;
 	case ESpinState::ModeSelect:       DrawModeSelect(*GM); break;
+	case ESpinState::ModifierSelect:   DrawModifierSelect(*GM); break;
 	case ESpinState::SettingsMenu:     DrawSettings(*GM); break;
 	case ESpinState::Leaderboard:      DrawLeaderboard(*GM); break;
 	case ESpinState::ProfileSelect:    DrawProfileSelect(*GM); break;
@@ -148,7 +162,7 @@ void ASpinHUD::DrawHUD()
 				{ TEXT("Posts will slide onto the dial. Don't let the hand touch them."), TextMain },
 				{ FString::Printf(TEXT("HOLD %s to raise the hand over them."), *GM->GetLiftKey(false)), Cyan },
 				{ TEXT("You lose points while the hand is up, and it drops by itself after one full turn."), TextDim },
-				{ FString::Printf(TEXT("You have %d lives. Hitting an obstacle costs one; hopping one earns one back."), GM->MaxLives), FLinearColor(1.f, 0.65f, 0.65f) },
+				{ FString::Printf(TEXT("You have %d lives. Hitting an obstacle costs one; hopping one earns one back."), GM->GetRunMaxLives()), FLinearColor(1.f, 0.65f, 0.65f) },
 			},
 			TEXT("Hold"), GM->GetLiftKey(), Cyan);
 		break;
@@ -585,8 +599,13 @@ void ASpinHUD::DrawRunModule(const ASpinGameMode& GM, float X, float Y)
 
 	DrawPanel(X, Y, W, Bottom - Y, Gold);
 
-	// Header: what this is, and whose run it is.
-	DrawLabel(TEXT("SCORE"), X + P, HeaderY, TinySize, TextDim, ESpinTextAlign::Left, true);
+	// Header: what this is (and what kind of run, with its modifier bonus), and whose run it is.
+	FString Header = GM.bDailyRun ? TEXT("DAILY SCORE") : TEXT("SCORE");
+	if (GM.RunModifiers != 0)
+	{
+		Header += TEXT("   MODS ") + FormatMultiplier(GM.RunPointsMultiplier);
+	}
+	DrawLabel(Header, X + P, HeaderY, TinySize, GM.RunModifiers != 0 ? Purple : TextDim, ESpinTextAlign::Left, true);
 	DrawLabel(GM.GetPlayerName(), X + W - P, HeaderY, TinySize, Cyan, ESpinTextAlign::Right, true);
 
 	// Points, with the combo multiplier beside them: "how much" and "how fast it's growing" at one glance.
@@ -619,7 +638,7 @@ void ASpinHUD::DrawRunModule(const ASpinGameMode& GM, float X, float Y)
 		}
 		else
 		{
-			DrawLabel(FString::Printf(TEXT("BEST  %s"), *FormatPoints(GM.BestPoints)), X + P, BestY, SmallSize, TextDim, ESpinTextAlign::Left, true);
+			DrawLabel(FString::Printf(TEXT("%s  %s"), GM.bDailyRun ? TEXT("TODAY") : TEXT("BEST"), *FormatPoints(GM.BestPoints)), X + P, BestY, SmallSize, TextDim, ESpinTextAlign::Left, true);
 			DrawLabel(FString::Printf(TEXT("%s to go"), *FormatPoints(GM.BestPoints - GM.Points)), X + W - P, BestY, SmallSize, TextDim, ESpinTextAlign::Right);
 			DrawBar(X + P, BestBarY, W - P * 2.f, U(4.f), static_cast<float>(GM.Points) / GM.BestPoints, Fade(Gold, 0.7f));
 		}
@@ -773,12 +792,12 @@ void ASpinHUD::DrawHealthModule(const ASpinGameMode& GM, float RightX, float Y)
 
 	if (bMisses)
 	{
-		DrawRow(TEXT("MISSES"), TEXT("no refills"), GM.MissLives, GM.MaxMissLives, Orange, GM.MissLifeLostTime, -1000.f);
+		DrawRow(TEXT("MISSES"), TEXT("no refills"), GM.MissLives, GM.GetRunMaxMissLives(), Orange, GM.MissLifeLostTime, -1000.f);
 	}
 	if (bLives)
 	{
 		DrawRow(TEXT("LIVES"), GM.IsTutorial() ? TEXT("practice - can't run out") : TEXT("+1 per obstacle hopped"),
-			GM.Lives, GM.MaxLives, Red, GM.LifeLostTime, GM.LifeGainedTime);
+			GM.Lives, GM.GetRunMaxLives(), Red, GM.LifeLostTime, GM.LifeGainedTime);
 	}
 }
 
@@ -1135,8 +1154,8 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 	float Y = DrawScreenTitle(TEXT("CHOOSE A MODE"), Name.IsEmpty() ? FString() : FString::Printf(TEXT("Playing as %s"), *Name), CX, ScreenH * 0.15f, Cyan);
 	Y += U(10.f);
 
-	const float Gap = U(32.f);
-	const float CardW = FMath::Min(U(400.f), (ScreenW - U(Margin) * 2.f - Gap) * 0.5f);
+	const float Gap = U(28.f);
+	const float CardW = FMath::Min(U(380.f), (ScreenW - U(Margin) * 2.f - Gap * 2.f) / 3.f);
 	const float CardH = U(260.f);
 
 	auto DrawCard = [&](float X, const FString& Title, const FLinearColor& Accent, const FString& Description, const FString& Key, EMenuAction Action)
@@ -1156,33 +1175,113 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 		AddRegion(X, Y, CardW, CardH, Action);
 	};
 
-	FString BestLine;
-	const USpinSaveGame* Save = GM.GetSaveData();
-	if (const FSpinProfile* Profile = Save ? Save->GetActiveProfile() : nullptr)
-	{
-		if (Profile->RunsPlayed > 0)
-		{
-			BestLine = FString::Printf(TEXT("YOUR BEST:  LV %d  /  %s"), Profile->BestLevel, *FormatPoints(Profile->BestPoints));
-		}
-	}
+	const float LeftX = CX - CardW * 1.5f - Gap;
+	const float MidX = CX - CardW * 0.5f;
+	const float RightX = CX + CardW * 0.5f + Gap;
 
-	DrawCard(CX - Gap * 0.5f - CardW, TEXT("TUTORIAL"), KeyColorOf(GM, 0),
+	DrawCard(LeftX, TEXT("TUTORIAL"), KeyColorOf(GM, 0),
 		FString::Printf(TEXT("Learn the ropes in %d short stages. Nothing can go wrong here."), GM.TutorialLevels.Num()),
 		KeyHintOf(GM, 0), EMenuAction::StartTutorial);
-	DrawCard(CX + Gap * 0.5f, TEXT("ENDLESS"), KeyColorOf(GM, 1),
-		TEXT("The real run. The hand speeds up, new mechanics unlock, and mistakes cost lives."),
-		KeyHintOf(GM, 1), EMenuAction::StartEndless);
-	Y += CardH + U(32.f);
+	DrawCard(MidX, TEXT("ENDLESS"), KeyColorOf(GM, 1),
+		TEXT("The real run. Pick optional modifiers for bonus points, then see how far you get."),
+		KeyHintOf(GM, 1), EMenuAction::OpenModifiers);
+	DrawCard(RightX, TEXT("DAILY"), KeyColorOf(GM, 2),
+		TEXT("Today's run is the same for everyone, with a twist. A new one every day."),
+		KeyHintOf(GM, 2), EMenuAction::StartDaily);
+	Y += CardH + U(18.f);
 
-	// The Endless best gets its own line under the cards, clear of the key prompts.
-	if (!BestLine.IsEmpty())
+	// Each mode's record goes on its own lines under its card, clear of the key prompts.
+	float InfoBottom = Y;
+	auto DrawInfo = [&](float CardX, const TArray<TPair<FString, FLinearColor>>& Lines)
 	{
-		DrawLabel(BestLine, CX, Y, SmallSize, Gold, ESpinTextAlign::Center, true);
-		Y += LineH(SmallSize) + U(24.f);
+		float LineY = Y;
+		for (const TPair<FString, FLinearColor>& Line : Lines)
+		{
+			DrawLabel(Line.Key, CardX + CardW * 0.5f, LineY, SmallSize, Line.Value, ESpinTextAlign::Center, true);
+			LineY += LineH(SmallSize) + U(4.f);
+		}
+		InfoBottom = FMath::Max(InfoBottom, LineY);
+	};
+
+	const USpinSaveGame* Save = GM.GetSaveData();
+	const FSpinProfile* Profile = Save ? Save->GetActiveProfile() : nullptr;
+	if (Profile && Profile->RunsPlayed > 0)
+	{
+		DrawInfo(MidX, { { FString::Printf(TEXT("YOUR BEST:  LV %d  /  %s"), Profile->BestLevel, *FormatPoints(Profile->BestPoints)), Gold } });
 	}
+
+	const int32 DailyBest = GM.GetDailyBest();
+	DrawInfo(RightX, {
+		{ FString::Printf(TEXT("TODAY'S TWIST:  %s"), *ASpinGameMode::GetModifierNames(ASpinGameMode::GetDailyModifiers())), Purple },
+		{ DailyBest > 0 ? FString::Printf(TEXT("YOUR BEST TODAY:  %s"), *FormatPoints(DailyBest)) : FString(TEXT("Not played yet today")), DailyBest > 0 ? Gold : TextDim },
+	});
+	Y = InfoBottom + U(20.f);
 
 	const float BackW = U(220.f);
 	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
+}
+
+void ASpinHUD::DrawModifierSelect(const ASpinGameMode& GM)
+{
+	DrawBackdrop(0.78f);
+
+	const float CX = ScreenW * 0.5f;
+	float Y = DrawScreenTitle(TEXT("MODIFIERS"), TEXT("Optional rules that make the run harder - and multiply every point you score"), CX, ScreenH * 0.1f, Purple);
+
+	const float PanelW = FMath::Min(U(720.f), ScreenW - U(Margin) * 2.f);
+	const float X = CX - PanelW * 0.5f;
+	const float P = U(Pad);
+	const float RowH = U(64.f);
+	const int32 NumModifiers = static_cast<int32>(ESpinModifier::Count);
+	const float FooterH = LineH(HeadingSize) + U(12.f);
+	DrawPanel(X, Y, PanelW, P * 2.f + NumModifiers * RowH + FooterH, Purple);
+
+	// One clickable row per modifier: a check box, its name and what it does, and its bonus.
+	for (int32 i = 0; i < NumModifiers; ++i)
+	{
+		const FSpinModifierInfo& Info = ASpinGameMode::GetModifierInfo(static_cast<ESpinModifier>(i));
+		const bool bOn = (GM.SelectedModifiers & (1 << i)) != 0;
+		const float RowX = X + P;
+		const float RowY = Y + P + i * RowH;
+		const float RowW = PanelW - P * 2.f;
+
+		if (IsHovered(RowX, RowY, RowW, RowH))
+		{
+			DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.04f), RowX, RowY, RowW, RowH);
+		}
+		if (i > 0)
+		{
+			DrawRect(PanelEdge, RowX, RowY, RowW, FMath::Max(1.f, U(1.f)));
+		}
+
+		const float Box = U(26.f);
+		const float BoxX = RowX + U(12.f);
+		const float BoxY = RowY + (RowH - Box) * 0.5f;
+		DrawRect(bOn ? Purple : TrackColor, BoxX, BoxY, Box, Box);
+		DrawOutline(BoxX, BoxY, Box, Box, bOn ? Purple : PanelEdge, FMath::Max(1.f, U(2.f)));
+
+		const float TextX = BoxX + Box + U(16.f);
+		const float NameY = RowY + (RowH - LineH(BodySize) - LineH(SmallSize)) * 0.5f;
+		DrawLabel(Info.Name, TextX, NameY, BodySize, bOn ? TextMain : TextDim, ESpinTextAlign::Left, true);
+		DrawLabel(Info.Description, TextX, NameY + LineH(BodySize), SmallSize, TextDim);
+		DrawLabel(FormatMultiplier(Info.PointsMultiplier), RowX + RowW - U(12.f), RowY + (RowH - LineH(HeadingSize)) * 0.5f, HeadingSize,
+			bOn ? Gold : TextFaint, ESpinTextAlign::Right, true);
+
+		AddRegion(RowX, RowY, RowW, RowH, EMenuAction::ToggleModifier, i);
+	}
+
+	// The combined bonus.
+	const float FooterY = Y + P + NumModifiers * RowH + U(6.f);
+	const float Total = ASpinGameMode::GetModifiersMultiplier(GM.SelectedModifiers);
+	DrawLabel(TEXT("POINTS MULTIPLIER"), X + P + U(12.f), FooterY + (LineH(HeadingSize) - LineH(SmallSize)) * 0.5f, SmallSize, TextDim, ESpinTextAlign::Left, true);
+	DrawLabel(FormatMultiplier(Total), X + PanelW - P - U(12.f), FooterY, HeadingSize, GM.SelectedModifiers != 0 ? Gold : TextFaint, ESpinTextAlign::Right, true);
+	Y += P * 2.f + NumModifiers * RowH + FooterH + U(28.f);
+
+	const float BtnW = U(260.f);
+	const float BtnH = U(60.f);
+	const float BtnGap = U(20.f);
+	DrawMenuButton(CX - BtnGap * 0.5f - BtnW, Y, BtnW, BtnH, TEXT("START"), EMenuAction::StartEndless, Gold, KeyHintOf(GM, 0));
+	DrawMenuButton(CX + BtnGap * 0.5f, Y, BtnW, BtnH, TEXT("BACK"), EMenuAction::Back, TextDim, KeyHintOf(GM, 1));
 }
 
 void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
@@ -1241,8 +1340,8 @@ void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
 	const USpinSaveGame* Save = GM.GetSaveData();
 	const FString Me = GM.GetPlayerName();
 
-	const float Gap = U(32.f);
-	const float PanelW = FMath::Min(U(600.f), (ScreenW - U(Margin) * 2.f - Gap) * 0.5f);
+	const float Gap = U(24.f);
+	const float PanelW = FMath::Min(U(580.f), (ScreenW - U(Margin) * 2.f - Gap * 2.f) / 3.f);
 	const float P = U(Pad) + U(4.f);
 	const float RowH = U(36.f);
 	const float HeaderH = LineH(HeadingSize) + U(8.f) + LineH(TinySize) + U(8.f);
@@ -1294,14 +1393,20 @@ void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
 			const FString Level = FString::Printf(TEXT("%d"), Run.Level);
 			const FString Points = FormatPoints(Run.Points);
 			DrawLabel(FString::FromInt(i + 1), RankX, TextY, SmallSize, i == 0 ? Gold : TextDim, ESpinTextAlign::Left, true);
-			DrawLabel(Run.PlayerName.IsEmpty() ? FString(TEXT("???")) : Run.PlayerName, NameX, TextY, SmallSize, bMine ? Cyan : TextMain, ESpinTextAlign::Left, bMine);
+			const float NameW = DrawLabel(Run.PlayerName.IsEmpty() ? FString(TEXT("???")) : Run.PlayerName, NameX, TextY, SmallSize, bMine ? Cyan : TextMain, ESpinTextAlign::Left, bMine);
+			// Runs played with modifiers carry their bonus, so a boosted score reads as one.
+			if (Run.Modifiers != 0)
+			{
+				DrawLabel(FormatMultiplier(ASpinGameMode::GetModifiersMultiplier(Run.Modifiers)), NameX + NameW + U(8.f), TextY, TinySize, Purple, ESpinTextAlign::Left, true);
+			}
 			DrawLabel(bByLevel ? Level : Points, PrimaryRight, TextY, SmallSize, i == 0 ? Gold : TextMain, ESpinTextAlign::Right, true);
 			DrawLabel(bByLevel ? Points : Level, SecondaryRight, TextY, SmallSize, TextDim, ESpinTextAlign::Right);
 		}
 	};
 
-	DrawBoard(CX - Gap * 0.5f - PanelW, TEXT("HIGHEST LEVEL"), Cyan, Save ? &Save->LevelBoard : nullptr, GM.LastRunLevelRank, true);
-	DrawBoard(CX + Gap * 0.5f, TEXT("HIGHEST SCORE"), Gold, Save ? &Save->ScoreBoard : nullptr, GM.LastRunScoreRank, false);
+	DrawBoard(CX - PanelW * 1.5f - Gap, TEXT("HIGHEST LEVEL"), Cyan, Save ? &Save->LevelBoard : nullptr, GM.LastRunLevelRank, true);
+	DrawBoard(CX - PanelW * 0.5f, TEXT("HIGHEST SCORE"), Gold, Save ? &Save->ScoreBoard : nullptr, GM.LastRunScoreRank, false);
+	DrawBoard(CX + PanelW * 0.5f + Gap, TEXT("TODAY'S DAILY"), Purple, Save ? Save->GetDailyBoard(ASpinGameMode::GetTodayKey()) : nullptr, GM.LastRunDailyRank, false);
 
 	Y += PanelH + U(14.f);
 	DrawLabel(TEXT("Green row = your last run      Cyan name = you"), CX, Y, TinySize, TextFaint, ESpinTextAlign::Center);
@@ -1481,7 +1586,19 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 		Reason = TEXT("Missed too many zones!");
 	}
 
-	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + U(26.f) + TileH + U(28.f) + BtnH + P;
+	// What kind of run it was, if not a plain one.
+	FString RunKind;
+	if (GM.bDailyRun)
+	{
+		RunKind = FString::Printf(TEXT("DAILY CHALLENGE  -  %s"), *ASpinGameMode::GetModifierNames(GM.RunModifiers));
+	}
+	else if (GM.RunModifiers != 0)
+	{
+		RunKind = FString::Printf(TEXT("%s  (%s POINTS)"), *ASpinGameMode::GetModifierNames(GM.RunModifiers), *FormatMultiplier(GM.RunPointsMultiplier));
+	}
+	const float RunKindH = RunKind.IsEmpty() ? 0.f : LineH(SmallSize) + U(4.f);
+
+	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + U(26.f) + TileH + U(28.f) + BtnH + P;
 	const float X = CX - CardW * 0.5f;
 	float Y = (ScreenH - CardH) * 0.5f;
 	DrawPanel(X, Y, CardW, CardH, Red);
@@ -1492,16 +1609,28 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	DrawLabel(TEXT("GAME OVER"), CX, Y, GameOverSize, Red, ESpinTextAlign::Center, true);
 	Y += LineH(GameOverSize) + U(4.f);
 	DrawLabel(Reason, CX, Y, BodySize, TextMain, ESpinTextAlign::Center);
-	Y += LineH(BodySize) + U(26.f);
+	Y += LineH(BodySize);
+	if (!RunKind.IsEmpty())
+	{
+		DrawLabel(RunKind, CX, Y + U(4.f), SmallSize, Purple, ESpinTextAlign::Center, true);
+		Y += RunKindH;
+	}
+	Y += U(26.f);
 
 	// The two results the leaderboards rank by, as tiles - each with how it stacks up.
-	// BestLevel / BestPoints are the player's bests from before this run.
+	// BestLevel / BestPoints are the player's bests from before this run (for a daily run,
+	// BestPoints is today's daily best, and the level isn't a record at all).
 	const int32 Level = GM.GetLevel();
-	const bool bNewBestLevel = GM.Hits > 0 && Level > GM.BestLevel;
+	const bool bNewBestLevel = !GM.bDailyRun && GM.Hits > 0 && Level > GM.BestLevel;
 	const bool bNewBestPoints = GM.Hits > 0 && GM.Points > GM.BestPoints;
+	const int32 ScoreRank = GM.bDailyRun ? GM.LastRunDailyRank : GM.LastRunScoreRank;
 
 	FString LevelStatus;
-	if (bNewBestLevel)
+	if (GM.bDailyRun)
+	{
+		LevelStatus = TEXT("Daily runs rank by score");
+	}
+	else if (bNewBestLevel)
 	{
 		LevelStatus = TEXT("NEW BEST!");
 	}
@@ -1515,12 +1644,14 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	FString PointsStatus;
 	if (bNewBestPoints)
 	{
-		PointsStatus = TEXT("NEW BEST!");
+		PointsStatus = !GM.bDailyRun ? FString(TEXT("NEW BEST!"))
+			: ScoreRank > 0 ? FString::Printf(TEXT("NEW BEST TODAY!  -  #%d today"), ScoreRank)
+			: FString(TEXT("NEW BEST TODAY!"));
 	}
 	else if (GM.BestPoints > 0)
 	{
-		const FString Short = FString::Printf(TEXT("%s short of your best"), *FormatPoints(GM.BestPoints - GM.Points));
-		PointsStatus = GM.LastRunScoreRank > 0 ? FString::Printf(TEXT("#%d  -  %s"), GM.LastRunScoreRank, *Short) : Short;
+		const FString Short = FString::Printf(TEXT("%s short of your best%s"), *FormatPoints(GM.BestPoints - GM.Points), GM.bDailyRun ? TEXT(" today") : TEXT(""));
+		PointsStatus = ScoreRank > 0 ? FString::Printf(TEXT("#%d  -  %s"), ScoreRank, *Short) : Short;
 	}
 
 	const float TileGap = U(20.f);

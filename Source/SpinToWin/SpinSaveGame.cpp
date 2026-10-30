@@ -60,6 +60,25 @@ void USpinSaveGame::AddRun(const FSpinRunRecord& Run, int32 MaxEntries, int32& O
 	}
 }
 
+int32 USpinSaveGame::AddDailyRun(const FSpinRunRecord& Run, int32 DayKey, int32 MaxEntries)
+{
+	if (DailyBoardDay != DayKey)
+	{
+		DailyBoard.Reset();
+		DailyBoardDay = DayKey;
+	}
+
+	return InsertRanked(DailyBoard, Run, FMath::Max(1, MaxEntries), [](const FSpinRunRecord& A, const FSpinRunRecord& B)
+	{
+		return A.Points != B.Points ? A.Points > B.Points : A.Level > B.Level;
+	});
+}
+
+const TArray<FSpinRunRecord>* USpinSaveGame::GetDailyBoard(int32 DayKey) const
+{
+	return DailyBoardDay == DayKey ? &DailyBoard : nullptr;
+}
+
 const FSpinProfile* USpinSaveGame::GetActiveProfile() const
 {
 	return Profiles.IsValidIndex(ActiveProfile) ? &Profiles[ActiveProfile] : nullptr;
@@ -119,6 +138,7 @@ void USpinSaveGame::DeleteProfile(int32 Index)
 	auto IsTheirs = [&Name](const FSpinRunRecord& Run) { return Run.PlayerName.Equals(Name, ESearchCase::IgnoreCase); };
 	LevelBoard.RemoveAll(IsTheirs);
 	ScoreBoard.RemoveAll(IsTheirs);
+	DailyBoard.RemoveAll(IsTheirs);
 
 	Profiles.RemoveAt(Index);
 

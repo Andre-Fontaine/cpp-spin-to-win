@@ -238,7 +238,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	// Clamp so a frame hitch can't make the hand skip over the zone.
 	const float Dt = FMath::Min(DeltaSeconds, 0.05f);
 
-	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu
+	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::ModifierSelect || State == ESpinState::SettingsMenu
 		|| State == ESpinState::Leaderboard || State == ESpinState::ProfileSelect || State == ESpinState::NameEntry)
 	{
 		// Slow idle spin behind the menus.
@@ -356,14 +356,30 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 
 	case ESpinState::ModeSelect:
-		// First button: tutorial. Second button: straight into Endless.
+		// Mirrors the three cards: tutorial, Endless (via the modifier screen), daily challenge.
 		if (ButtonIndex == 0)
 		{
 			StartTutorial();
 		}
 		else if (ButtonIndex == 1)
 		{
+			OpenModifiers();
+		}
+		else if (ButtonIndex == 2)
+		{
+			StartGame(true);
+		}
+		break;
+
+	case ESpinState::ModifierSelect:
+		// First button: start. Second button: back to mode select. Toggling modifiers is mouse-only.
+		if (ButtonIndex == 0)
+		{
 			StartGame();
+		}
+		else if (ButtonIndex == 1)
+		{
+			OpenModeSelect();
 		}
 		break;
 
@@ -469,13 +485,13 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 
 	case ESpinState::GameOver:
-		// Mirrors the game-over menu: first button retries, second goes back to the main menu.
-		// Quitting is mouse-only so it can't happen by accident.
+		// Mirrors the game-over menu: first button retries (the same kind of run), second goes back
+		// to the main menu. Quitting is mouse-only so it can't happen by accident.
 		if (IsGameOverMenuReady())
 		{
 			if (ButtonIndex == 0)
 			{
-				StartGame();
+				StartGame(bDailyRun);
 			}
 			else if (ButtonIndex == 1)
 			{
@@ -530,7 +546,7 @@ void ASpinGameMode::SetLiftHeld(bool bHeld)
 void ASpinGameMode::OnObstacleCleared()
 {
 	// The hand got over an obstacle: earn a life back.
-	if (State == ESpinState::Playing && Lives < MaxLives)
+	if (State == ESpinState::Playing && Lives < GetRunMaxLives())
 	{
 		++Lives;
 		if (GetWorld())
@@ -707,7 +723,7 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 		: (Grade == ESpinHitGrade::Good) ? GoodPoints
 		: OkPoints;
 
-	LastHitPoints = FMath::RoundToInt(BasePoints * PointsScale) * ComboMultiplier;
+	LastHitPoints = FMath::RoundToInt(BasePoints * PointsScale * RunPointsMultiplier) * ComboMultiplier;
 	const int32 OldPoints = Points;
 	Points += LastHitPoints;
 
@@ -736,12 +752,14 @@ void ASpinGameMode::LoadSaveData()
 		SaveData = Cast<USpinSaveGame>(UGameplayStatics::CreateSaveGameObject(USpinSaveGame::StaticClass()));
 	}
 	bPlayStationIcons = SaveData && SaveData->bPlayStationIcons;
+	SelectedModifiers = SaveData ? SaveData->SelectedModifiers : 0;
 }
 
 void ASpinGameMode::RecordRun()
 {
 	LastRunLevelRank = 0;
 	LastRunScoreRank = 0;
+	LastRunDailyRank = 0;
 
 	// A run that never landed a hit isn't worth a leaderboard slot.
 	if (!SaveData || Hits <= 0)
@@ -755,9 +773,136 @@ void ASpinGameMode::RecordRun()
 	Run.Points = Points;
 	Run.Hits = Hits;
 	Run.Date = FDateTime::Now();
+	Run.Modifiers = RunModifiers;
 
-	SaveData->AddRun(Run, LeaderboardSize, LastRunLevelRank, LastRunScoreRank);
+	// Daily runs only compete with that day's daily runs. One that ran past midnight is
+	// yesterday's challenge, and yesterday's board is already gone - so it isn't recorded.
+	if (bDailyRun)
+	{
+		if (RunDayKey == GetTodayKey())
+		{
+			LastRunDailyRank = SaveData->AddDailyRun(Run, RunDayKey, LeaderboardSize);
+		}
+	}
+	else
+	{
+		SaveData->AddRun(Run, LeaderboardSize, LastRunLevelRank, LastRunScoreRank);
+	}
 	WriteSaveData();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Modifiers and the daily challenge
+// ---------------------------------------------------------------------------------------------
+
+const FSpinModifierInfo& ASpinGameMode::GetModifierInfo(ESpinModifier Modifier)
+{
+	// The multipliers roughly track how much harder each one makes a run.
+	static const FSpinModifierInfo Infos[] =
+	{
+		{ TEXT("FAST HAND"),  TEXT("The hand starts 35% faster."),                           1.3f },
+		{ TEXT("TINY ZONES"), TEXT("Target zones are 30% narrower."),                       1.5f },
+		{ TEXT("WILD SPIN"),  TEXT("The hand only sometimes reverses after a hit."),         1.25f },
+		{ TEXT("EARLY JAMS"), TEXT("Jams from level 1, and half again as often."),           1.3f },
+		{ TEXT("ONE LIFE"),   TEXT("One life and one miss: any mistake ends the run."),      2.f },
+	};
+	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinModifier::Count), "One entry per modifier");
+	return Infos[FMath::Clamp(static_cast<int32>(Modifier), 0, static_cast<int32>(ESpinModifier::Count) - 1)];
+}
+
+float ASpinGameMode::GetModifiersMultiplier(int32 Mask)
+{
+	float Multiplier = 1.f;
+	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
+	{
+		if (Mask & (1 << i))
+		{
+			Multiplier *= GetModifierInfo(static_cast<ESpinModifier>(i)).PointsMultiplier;
+		}
+	}
+	return Multiplier;
+}
+
+FString ASpinGameMode::GetModifierNames(int32 Mask)
+{
+	TArray<FString> Names;
+	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
+	{
+		if (Mask & (1 << i))
+		{
+			Names.Add(GetModifierInfo(static_cast<ESpinModifier>(i)).Name);
+		}
+	}
+	return FString::Join(Names, TEXT(" + "));
+}
+
+bool ASpinGameMode::HasModifier(ESpinModifier Modifier) const
+{
+	return (RunModifiers & (1 << static_cast<int32>(Modifier))) != 0;
+}
+
+int32 ASpinGameMode::GetTodayKey()
+{
+	const FDateTime Today = FDateTime::Now();
+	return Today.GetYear() * 10000 + Today.GetMonth() * 100 + Today.GetDay();
+}
+
+int32 ASpinGameMode::GetDailyModifiers()
+{
+	const FRandomStream DayRandom(static_cast<int32>(HashCombine(static_cast<uint32>(GetTodayKey()), 0xD411u)));
+	return 1 << DayRandom.RandRange(0, static_cast<int32>(ESpinModifier::Count) - 1);
+}
+
+int32 ASpinGameMode::GetDailyBest() const
+{
+	const TArray<FSpinRunRecord>* Board = SaveData ? SaveData->GetDailyBoard(GetTodayKey()) : nullptr;
+	const FString Me = GetPlayerName();
+	if (!Board || Me.IsEmpty())
+	{
+		return 0;
+	}
+
+	// The board is sorted by score, so the first run of theirs is their best.
+	const FSpinRunRecord* Best = Board->FindByPredicate([&Me](const FSpinRunRecord& Run)
+	{
+		return Run.PlayerName.Equals(Me, ESearchCase::IgnoreCase);
+	});
+	return Best ? Best->Points : 0;
+}
+
+int32 ASpinGameMode::GetRunMaxLives() const
+{
+	return HasModifier(ESpinModifier::OneLife) ? 1 : MaxLives;
+}
+
+int32 ASpinGameMode::GetRunMaxMissLives() const
+{
+	return HasModifier(ESpinModifier::OneLife) ? 1 : MaxMissLives;
+}
+
+float ASpinGameMode::GetRunStartSpeed() const
+{
+	return StartSpeed * (HasModifier(ESpinModifier::FastHand) ? 1.35f : 1.f);
+}
+
+float ASpinGameMode::GetRunStartZoneHalfWidth() const
+{
+	return StartZoneHalfWidth * (HasModifier(ESpinModifier::TinyZones) ? 0.7f : 1.f);
+}
+
+float ASpinGameMode::GetRunMinZoneHalfWidth() const
+{
+	return MinZoneHalfWidth * (HasModifier(ESpinModifier::TinyZones) ? 0.7f : 1.f);
+}
+
+int32 ASpinGameMode::GetRunJamStartLevel() const
+{
+	return HasModifier(ESpinModifier::EarlyJams) ? 1 : JamStartLevel;
+}
+
+float ASpinGameMode::GetRunJamChance() const
+{
+	return FMath::Min(1.f, JamChance * (HasModifier(ESpinModifier::EarlyJams) ? 1.5f : 1.f));
 }
 
 void ASpinGameMode::WriteSaveData()
@@ -875,10 +1020,25 @@ void ASpinGameMode::CancelName()
 // Endless mode
 // ---------------------------------------------------------------------------------------------
 
-void ASpinGameMode::StartGame()
+void ASpinGameMode::OpenModifiers()
+{
+	State = ESpinState::ModifierSelect;
+}
+
+void ASpinGameMode::StartGame(bool bDaily)
 {
 	Mode = ESpinMode::Endless;
 	State = ESpinState::Playing;
+
+	// The daily challenge is the same run for everyone today: a seed and a modifier picked from
+	// the date. A normal run plays whatever was picked on the modifier screen, on a fresh seed.
+	bDailyRun = bDaily;
+	RunDayKey = GetTodayKey();
+	RunModifiers = bDaily ? GetDailyModifiers() : SelectedModifiers;
+	RunPointsMultiplier = GetModifiersMultiplier(RunModifiers);
+	RunSeed = bDaily ? static_cast<int32>(HashCombine(static_cast<uint32>(RunDayKey), 0x5A17u)) : FMath::Rand();
+	RunRandom.Initialize(RunSeed);
+
 	Hits = 0;
 	Points = 0;
 	ComboMultiplier = 1;
@@ -890,26 +1050,34 @@ void ASpinGameMode::StartGame()
 
 	// What this run is chasing (the player's own bests), and whether they've earned a quicker opening.
 	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	// A daily run chases today's daily best rather than the all-time one. BestLevel still decides
+	// which explanation screens the player has already seen.
 	BestLevel = Profile ? Profile->BestLevel : 0;
-	BestPoints = Profile ? Profile->BestPoints : 0;
-	bFastStart = FastStartLevels > 0 && BestLevel >= FastStartUnlockLevel;
-	if (bFastStart)
+	BestPoints = bDaily ? GetDailyBest() : (Profile ? Profile->BestPoints : 0);
+
+	// No fast start on the daily, so everyone plays exactly the same opening.
+	bFastStart = !bDaily && FastStartLevels > 0 && BestLevel >= FastStartUnlockLevel;
+	if (bDaily)
+	{
+		ShowNotice(FString::Printf(TEXT("DAILY CHALLENGE - today's twist: %s"), *GetModifierNames(RunModifiers)));
+	}
+	else if (bFastStart)
 	{
 		ShowNotice(FString::Printf(TEXT("FAST START: you've reached level %d before, so the first %d levels fly by"), BestLevel, FastStartLevels));
 	}
 
 	HandAngle = 0.f;
 	Direction = 1.f;
-	CurrentSpeed = StartSpeed;
-	ZoneHalfWidth = StartZoneHalfWidth;
+	CurrentSpeed = GetRunStartSpeed();
+	ZoneHalfWidth = GetRunStartZoneHalfWidth();
 	ActivePromptIndex = 0;
 	PromptStreak = 1;
 	LevelUpTime = -1000.f;
-	Lives = MaxLives;
+	Lives = GetRunMaxLives();
 	LifeLostTime = -1000.f;
 	LifeGainedTime = -1000.f;
 	bOutOfLives = false;
-	MissLives = MaxMissLives;
+	MissLives = GetRunMaxMissLives();
 	MissLifeLostTime = -1000.f;
 	bOutOfMissLives = false;
 	// A few seconds of invincibility (with the big countdown) to get oriented before anything can
@@ -941,6 +1109,10 @@ void ASpinGameMode::OnHit()
 	++Hits;
 	RegisterHit();
 
+	// Every roll after this hit comes from the seed and the hit count alone, so the same seed
+	// always plays out the same - however the run went up to here.
+	RunRandom.Initialize(static_cast<int32>(HashCombine(static_cast<uint32>(RunSeed), static_cast<uint32>(Hits))));
+
 	const int32 NewLevel = GetLevel();
 
 	// The newest button this hit brings into play, if any.
@@ -955,7 +1127,7 @@ void ASpinGameMode::OnHit()
 	}
 	const bool bUnlocksButton = UnlockedButton != INDEX_NONE;
 	const bool bUnlocksObstacles = OldLevel < ObstacleStartLevel && NewLevel >= ObstacleStartLevel;
-	const bool bUnlocksJams = OldLevel < JamStartLevel && NewLevel >= JamStartLevel;
+	const bool bUnlocksJams = OldLevel < GetRunJamStartLevel() && NewLevel >= GetRunJamStartLevel();
 
 	// The explanation (pause) screens only show until the saved best has reached that level - after
 	// that the player has seen them, and the "next level" heads-up plus the level banner's unlock line
@@ -963,7 +1135,7 @@ void ASpinGameMode::OnHit()
 	// screen wins, then obstacles, then jams.
 	const bool bButtonIntro = bUnlocksButton && BestLevel < GetButtonUnlockLevel(UnlockedButton);
 	const bool bObstacleIntro = !bButtonIntro && bUnlocksObstacles && BestLevel < ObstacleStartLevel;
-	const bool bJamIntro = !bButtonIntro && !bObstacleIntro && bUnlocksJams && BestLevel < JamStartLevel;
+	const bool bJamIntro = !bButtonIntro && !bObstacleIntro && bUnlocksJams && BestLevel < GetRunJamStartLevel();
 	const bool bPauseScreen = bButtonIntro || bObstacleIntro || bJamIntro;
 
 	// The normal "LEVEL N" banner is skipped when a pause screen takes over instead.
@@ -974,10 +1146,13 @@ void ASpinGameMode::OnHit()
 
 	Shake(HitShake);
 
-	// Flip direction, speed up, shrink the zone, and pick the next target.
-	Direction = -Direction;
+	// Flip direction (only sometimes, with Wild Spin), speed up, shrink the zone, and pick the next target.
+	if (!HasModifier(ESpinModifier::WildSpin) || RunRandom.FRand() < 0.5f)
+	{
+		Direction = -Direction;
+	}
 	CurrentSpeed = FMath::Min(CurrentSpeed * FMath::Pow(SpeedMultiplier, RampSteps), MaxSpeed);
-	ZoneHalfWidth = FMath::Max(MinZoneHalfWidth, ZoneHalfWidth - ZoneShrinkPerHit * RampSteps);
+	ZoneHalfWidth = FMath::Max(GetRunMinZoneHalfWidth(), ZoneHalfWidth - ZoneShrinkPerHit * RampSteps);
 	bHandWasInZone = false;
 
 	// Pick which button the next zone needs (random once several buttons are in play).
@@ -988,7 +1163,7 @@ void ASpinGameMode::OnHit()
 
 	// Sometimes the hand starts to overheat.
 	if (!bPauseScreen && JamPhase == EJamPhase::None
-		&& GetLevel() >= JamStartLevel && FMath::FRand() < JamChance)
+		&& GetLevel() >= GetRunJamStartLevel() && RunRandom.FRand() < GetRunJamChance())
 	{
 		StartJamSparks();
 	}
@@ -997,8 +1172,8 @@ void ASpinGameMode::OnHit()
 	{
 		// A button just unlocked: reset the hand to its slowest speed and the zone to its
 		// widest, and make the very first zone need the new button - with or without the screen.
-		CurrentSpeed = StartSpeed;
-		ZoneHalfWidth = StartZoneHalfWidth;
+		CurrentSpeed = GetRunStartSpeed();
+		ZoneHalfWidth = GetRunStartZoneHalfWidth();
 		ActivePromptIndex = UnlockedButton;
 		PromptStreak = 1;
 	}
@@ -1040,7 +1215,7 @@ bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& Ou
 			Hints.Add(FString::Printf(TEXT("Zones can ask for {%d} too - match the colour"), i));
 		}
 	}
-	if (Level == JamStartLevel && Prompts.IsValidIndex(0))
+	if (Level == GetRunJamStartLevel() && Prompts.IsValidIndex(0))
 	{
 		Titles.Add(TEXT("JAMS"));
 		Hints.Add(TEXT("Sparks mean a jam is coming - mash {0} to repair it"));
@@ -1163,6 +1338,10 @@ void ASpinGameMode::EndGame()
 void ASpinGameMode::StartTutorial()
 {
 	Mode = ESpinMode::Tutorial;
+	bDailyRun = false;
+	RunModifiers = 0;
+	RunPointsMultiplier = 1.f;
+	RunRandom.Initialize(FMath::Rand());
 	Hits = 0;
 	Points = 0;
 	LastHitGrade = ESpinHitGrade::None;
@@ -1309,7 +1488,7 @@ void ASpinGameMode::RespawnObstacleForCurrentZone()
 	Clock->RetireObstacles();
 
 	const FTutorialLevel* Level = GetTutorialLevel();
-	if (!Level || !Level->bObstacles || FMath::FRand() >= Level->ObstacleChance)
+	if (!Level || !Level->bObstacles || RunRandom.FRand() >= Level->ObstacleChance)
 	{
 		return;
 	}
@@ -1323,10 +1502,10 @@ void ASpinGameMode::RespawnObstacleForCurrentZone()
 		return; // no room to give the player a fair warning
 	}
 
-	const float Dist = FMath::Min(MinDist + FMath::FRandRange(0.f, 15.f), MaxDist);
+	const float Dist = FMath::Min(MinDist + RunRandom.FRandRange(0.f, 15.f), MaxDist);
 	Clock->SpawnObstacle(
 		HandAngle + Direction * Dist,
-		FMath::FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction),
+		RunRandom.FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction),
 		Dist);
 }
 
@@ -1459,7 +1638,11 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::Back:
-		if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu || State == ESpinState::Leaderboard
+		if (State == ESpinState::ModifierSelect)
+		{
+			OpenModeSelect();
+		}
+		else if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu || State == ESpinState::Leaderboard
 			|| State == ESpinState::ProfileSelect)
 		{
 			CloseMenus();
@@ -1474,9 +1657,35 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::StartEndless:
-		if (State == ESpinState::ModeSelect || State == ESpinState::TutorialComplete)
+		if (State == ESpinState::ModifierSelect || State == ESpinState::TutorialComplete)
 		{
 			StartGame();
+		}
+		break;
+
+	case EMenuAction::OpenModifiers:
+		if (State == ESpinState::ModeSelect)
+		{
+			OpenModifiers();
+		}
+		break;
+
+	case EMenuAction::ToggleModifier:
+		if (State == ESpinState::ModifierSelect && Index >= 0 && Index < static_cast<int32>(ESpinModifier::Count))
+		{
+			SelectedModifiers ^= 1 << Index;
+			if (SaveData)
+			{
+				SaveData->SelectedModifiers = SelectedModifiers;
+				WriteSaveData();
+			}
+		}
+		break;
+
+	case EMenuAction::StartDaily:
+		if (State == ESpinState::ModeSelect)
+		{
+			StartGame(true);
 		}
 		break;
 
@@ -1523,7 +1732,7 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 	case EMenuAction::RetryGame:
 		if (IsGameOverMenuReady())
 		{
-			StartGame();
+			StartGame(bDailyRun);
 		}
 		break;
 
@@ -1802,7 +2011,7 @@ void ASpinGameMode::PickNextPrompt()
 	int32 Next = 0;
 	if (NumButtons > 1)
 	{
-		Next = FMath::RandRange(0, NumButtons - 1);
+		Next = RunRandom.RandRange(0, NumButtons - 1);
 
 		// Keep it random, but never let one button repeat more than MaxSameButtonInRow times.
 		if (Next == ActivePromptIndex && PromptStreak >= MaxSameButtonInRow)
@@ -1824,7 +2033,7 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 	}
 
 	// Place the zone ahead of the hand in its current direction of travel.
-	float Offset = FMath::FRandRange(MinZoneOffset, MaxZoneOffset);
+	float Offset = RunRandom.FRandRange(MinZoneOffset, MaxZoneOffset);
 
 	float Chance = ObstacleChance;
 	if (IsTutorial())
@@ -1833,13 +2042,13 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 		Chance = Level ? Level->ObstacleChance : 0.f;
 	}
 
-	if (bAllowObstacle && Clock && ObstaclesEnabled() && FMath::FRand() < Chance)
+	if (bAllowObstacle && Clock && ObstaclesEnabled() && RunRandom.FRand() < Chance)
 	{
 		// The zone must never start on top of the hand, so it can't wrap too close to where the hand is.
 		const float MaxOffset = 360.f - ZoneHalfWidth - 12.f;
 
 		// The obstacle sits far enough ahead that there is time to see it and lift the hand...
-		float ObstacleDist = FMath::Max(CurrentSpeed * ObstacleWarningTime, MinObstacleDistance) + FMath::FRandRange(0.f, 15.f);
+		float ObstacleDist = FMath::Max(CurrentSpeed * ObstacleWarningTime, MinObstacleDistance) + RunRandom.FRandRange(0.f, 15.f);
 		ObstacleDist = FMath::Min(ObstacleDist, MaxOffset - ObstacleClearGap - ZoneHalfWidth);
 
 		// ...and the zone sits beyond it, with a gap after it.
@@ -1847,7 +2056,7 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 
 		Clock->SpawnObstacle(
 			HandAngle + Direction * ObstacleDist,
-			FMath::FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction),
+			RunRandom.FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction),
 			ObstacleDist);
 	}
 

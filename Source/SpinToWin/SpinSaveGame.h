@@ -30,6 +30,10 @@ struct FSpinRunRecord
 
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	FDateTime Date;
+
+	/** Modifiers the run was played with (bit mask of 1 << ESpinModifier). */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 Modifiers = 0;
 };
 
 /** One player. Their personal bests live here rather than being read off the shared boards, so
@@ -87,6 +91,25 @@ public:
 
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	TArray<FSpinRunRecord> ScoreBoard;
+
+	/** Modifiers last picked on the modifier screen, so the choice carries over between sessions. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 SelectedModifiers = 0;
+
+	/** The daily challenge board, ranked by score, and which day (YYYYMMDD) it belongs to. It
+	 *  starts over when the day changes. Daily runs only go here, not on the all-time boards. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	TArray<FSpinRunRecord> DailyBoard;
+
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 DailyBoardDay = 0;
+
+	/** Adds a daily run to the board for DayKey (clearing it first if it's from another day).
+	 *  Returns its 1-based rank, or 0 if it didn't make the board. */
+	int32 AddDailyRun(const FSpinRunRecord& Run, int32 DayKey, int32 MaxEntries);
+
+	/** The daily board if it belongs to DayKey, otherwise null (nobody has played that day yet). */
+	const TArray<FSpinRunRecord>* GetDailyBoard(int32 DayKey) const;
 
 	/** Adds a run to both boards (each kept sorted and trimmed to MaxEntries) and to its player's
 	 *  personal bests. Returns its 1-based rank on each board through the out params, or 0 if it

@@ -38,6 +38,7 @@ bool ASpinPlayerController::IsInMenuState() const
 	{
 	case ESpinState::WaitingToStart:
 	case ESpinState::ModeSelect:
+	case ESpinState::ModifierSelect:
 	case ESpinState::SettingsMenu:
 	case ESpinState::Leaderboard:
 	case ESpinState::ProfileSelect:
