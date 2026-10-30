@@ -9,14 +9,17 @@ A clock-style hand sweeps around a dial. Press the right button while the hand i
 | Input | Action |
 |---|---|
 | W / Gamepad A (Xbox) or X (PlayStation) | Hit the first zone, confirm menus/prompts |
-| D / Gamepad B (Xbox) or O (PlayStation) | Hit the second zone (unlocks later), confirm menus/prompts |
-| Hold Left Click / Right Trigger | Raise the hand over an obstacle |
+| D / Gamepad B (Xbox) or O (PlayStation) | Hit the second zone (unlocks at level 4), confirm menus/prompts |
+| A / Gamepad X (Xbox) or Square (PlayStation) | Hit the third zone (unlocks at level 6) |
+| Hold Left Click / Right Trigger | Raise the hand over an obstacle (costs points while up, drops after one full turn) |
 | Mouse | Click buttons on the main menu, mode select, settings, and pause screens |
+
+On-screen button prompts follow whichever device you used last (keyboard or gamepad).
 
 ## Modes
 
 - **Tutorial** - 7 short, unfailable levels that introduce the zone, the second button, obstacles/the lift, and jams one at a time.
-- **Endless** - the real run. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life and pause the run rather than ending it outright - the run only ends when you're out of lives. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
+- **Endless** - the real run. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life and pause the run rather than ending it outright - the run only ends when you're out of lives. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
 
 ## Status
 
@@ -29,7 +32,7 @@ Early prototype.
 - [x] Non-regenerating "miss" lives for missed/mistimed zones, separate from obstacle lives
 - [x] Mistake recovery: pause, confirm, then a few seconds of invincibility instead of an instant game over
 - [x] Tutorial mode
-- [x] Main menu (Play / Settings), mode select, and a settings screen (quality, resolution, volume)
+- [x] Main menu (Play / Settings), mode select, and a settings screen (quality, resolution, volume, Xbox or PlayStation controller icons)
 - [x] Precision scoring (PERFECT / GOOD / OK) with a combo multiplier for PERFECT streaks
 - [x] Saved local leaderboard, ranked two ways: highest level and highest score
 - [x] Player profiles: pick or add a player on the main menu; runs go on the shared leaderboard under their name, and personal bests are tracked per player

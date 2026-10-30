@@ -24,17 +24,27 @@ ASpinGameMode::ASpinGameMode()
 
 	// Button 0: always available.
 	FSpinPrompt First;
-	First.Label = TEXT("W");
-	First.Hint = TEXT("W / A / X");
+	First.KeyboardKey = TEXT("W");
+	First.XboxButton = TEXT("A");
+	First.PlayStationButton = TEXT("X");
 	First.Color = FLinearColor(0.1f, 0.8f, 0.2f); // green
 	Prompts.Add(First);
 
 	// Button 1: the second button.
 	FSpinPrompt Second;
-	Second.Label = TEXT("D");
-	Second.Hint = TEXT("D / B / O");
+	Second.KeyboardKey = TEXT("D");
+	Second.XboxButton = TEXT("B");
+	Second.PlayStationButton = TEXT("O");
 	Second.Color = FLinearColor(0.2f, 0.5f, 1.f); // blue
 	Prompts.Add(Second);
+
+	// Button 2: the third button. "[]" is the PlayStation Square button.
+	FSpinPrompt Third;
+	Third.KeyboardKey = TEXT("A");
+	Third.XboxButton = TEXT("X");
+	Third.PlayStationButton = TEXT("[]");
+	Third.Color = FLinearColor(0.85f, 0.25f, 1.f); // purple
+	Prompts.Add(Third);
 
 	BuildTutorialLevels();
 }
@@ -42,8 +52,6 @@ ASpinGameMode::ASpinGameMode()
 void ASpinGameMode::BuildTutorialLevels()
 {
 	// All the tutorial numbers live here. Speeds are in degrees per second, zone sizes are half-widths in degrees.
-	const FString First = Prompts[0].Hint;
-	const FString Second = Prompts[1].Hint;
 
 	TutorialLevels.Reset();
 
@@ -52,9 +60,9 @@ void ASpinGameMode::BuildTutorialLevels()
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 1 - THE BASICS");
 		L.IntroLines.Add(TEXT("A hand sweeps around the dial."));
-		L.IntroLines.Add(FString::Printf(TEXT("Press %s when it is inside the green zone."), *First));
+		L.IntroLines.Add(TEXT("Press {0} when it is inside the green zone."));
 		L.IntroLines.Add(TEXT("Miss? No problem. The hand keeps going, just try again."));
-		L.Instruction = FString::Printf(TEXT("Press %s when the hand is inside the green zone"), *First);
+		L.Instruction = TEXT("Press {0} when the hand is inside the green zone");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 70.f;
@@ -68,7 +76,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 2 - A LITTLE FASTER");
 		L.IntroLines.Add(TEXT("Same thing, a little quicker, with smaller zones."));
-		L.Instruction = FString::Printf(TEXT("Press %s when the hand is inside the green zone"), *First);
+		L.Instruction = TEXT("Press {0} when the hand is inside the green zone");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 85.f;
@@ -82,10 +90,10 @@ void ASpinGameMode::BuildTutorialLevels()
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 3 - A SECOND BUTTON");
 		L.IntroLines.Add(TEXT("Zones now come in two colors."));
-		L.IntroLines.Add(FString::Printf(TEXT("GREEN zone: press %s"), *First));
-		L.IntroLines.Add(FString::Printf(TEXT("BLUE zone: press %s"), *Second));
+		L.IntroLines.Add(TEXT("GREEN zone: press {0}"));
+		L.IntroLines.Add(TEXT("BLUE zone: press {1}"));
 		L.IntroLines.Add(TEXT("The zones are big again while you get used to it."));
-		L.Instruction = FString::Printf(TEXT("Green zone: %s     Blue zone: %s"), *First, *Second);
+		L.Instruction = TEXT("Green zone: {0}     Blue zone: {1}");
 		L.Confirm = ETutorialConfirm::SecondButton;
 		L.Hits = 10;
 		L.Speed = 85.f;
@@ -100,7 +108,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 4 - SPEEDING UP");
 		L.IntroLines.Add(TEXT("Both buttons again, a little faster, with smaller zones."));
-		L.Instruction = FString::Printf(TEXT("Green zone: %s     Blue zone: %s"), *First, *Second);
+		L.Instruction = TEXT("Green zone: {0}     Blue zone: {1}");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -114,10 +122,10 @@ void ASpinGameMode::BuildTutorialLevels()
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 5 - OBSTACLES");
 		L.IntroLines.Add(TEXT("Posts will slide onto the dial. Don't let the hand touch them."));
-		L.IntroLines.Add(TEXT("HOLD LEFT CLICK / R2 to raise the hand over a post. It drops by itself once you are past."));
-		L.IntroLines.Add(TEXT("Raise the hand with no post out and a real run takes a life. Not here, but remember it."));
+		L.IntroLines.Add(TEXT("HOLD {LIFT} to raise the hand over a post. It drops by itself after one full turn."));
+		L.IntroLines.Add(TEXT("In a real run you lose points for as long as the hand is up, so only lift when you need to."));
 		L.IntroLines.Add(FString::Printf(TEXT("You get %d lives in a real run, and hopping a post earns one back."), MaxLives));
-		L.Instruction = TEXT("Hold LEFT CLICK / R2 to raise the hand over posts");
+		L.Instruction = TEXT("Hold {LIFT} to raise the hand over posts");
 		L.Confirm = ETutorialConfirm::Lift;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -134,7 +142,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.Title = TEXT("LEVEL 6 - EVERYTHING TOGETHER");
 		L.IntroLines.Add(TEXT("The second button is back."));
 		L.IntroLines.Add(TEXT("Use both buttons and hop the posts at the same time."));
-		L.Instruction = FString::Printf(TEXT("Green: %s   Blue: %s   Raise: LEFT CLICK / R2"), *First, *Second);
+		L.Instruction = TEXT("Green: {0}   Blue: {1}   Raise: {LIFT}");
 		L.Confirm = ETutorialConfirm::SecondButton;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -152,9 +160,9 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.Title = TEXT("LEVEL 7 - JAMS");
 		L.IntroLines.Add(TEXT("Sparks at the center mean the hand is about to jam."));
 		L.IntroLines.Add(TEXT("A jammed hand keeps spinning and ignores everything in its way."));
-		L.IntroLines.Add(FString::Printf(TEXT("Press %s again and again to fix it before the time bar runs out."), *First));
+		L.IntroLines.Add(TEXT("Press {0} again and again to fix it before the time bar runs out."));
 		L.IntroLines.Add(TEXT("In a real run you get 3 seconds, or the hand breaks and it is game over."));
-		L.Instruction = FString::Printf(TEXT("If the hand jams, press %s again and again"), *First);
+		L.Instruction = TEXT("If the hand jams, press {0} again and again");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -245,6 +253,16 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 
 	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * Dt + 360.f, 360.f);
 
+	// Endless: a lifted hand costs points for as long as it's up. Fractions carry over between
+	// frames so the drain stays steady at any frame rate.
+	if (!IsTutorial() && Clock && Clock->IsLiftActive())
+	{
+		LiftPointsDebt += LiftPointsPerSecond * Dt;
+		const int32 Whole = FMath::FloorToInt(LiftPointsDebt);
+		LiftPointsDebt -= Whole;
+		Points = FMath::Max(0, Points - Whole);
+	}
+
 	// Invincibility window after losing a life: the hand keeps moving, but
 	// nothing can go wrong (and nothing can be hit) until the timer runs out.
 	if (bInvincible)
@@ -285,7 +303,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 				bTutorialObstacleHit = true;
 				bZoneTainted = true;
 				Shake(LifeLostShake);
-				ShowNotice(TEXT("You touched a post! Hold LEFT CLICK / R2 to raise the hand over it. Try the lap again."));
+				ShowNotice(TEXT("You touched a post! Hold {LIFT} to raise the hand over it. Try the lap again."));
 			}
 		}
 		else
@@ -331,7 +349,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		{
 			OpenModeSelect();
 		}
-		else
+		else if (ButtonIndex == 1)
 		{
 			OpenSettings();
 		}
@@ -343,7 +361,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		{
 			StartTutorial();
 		}
-		else
+		else if (ButtonIndex == 1)
 		{
 			StartGame();
 		}
@@ -407,8 +425,8 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 
 	case ESpinState::NewButtonIntro:
-		// The player must press the newly unlocked button (index 1) to confirm and continue.
-		if (ButtonIndex == 1)
+		// The player must press the newly unlocked button to confirm and continue.
+		if (ButtonIndex == NewButtonIndex)
 		{
 			ResumeAfterIntro();
 		}
@@ -444,7 +462,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		{
 			StartGame();
 		}
-		else
+		else if (ButtonIndex == 1)
 		{
 			ReturnToTitle();
 		}
@@ -459,7 +477,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 			{
 				StartGame();
 			}
-			else
+			else if (ButtonIndex == 1)
 			{
 				ReturnToTitle();
 			}
@@ -499,25 +517,9 @@ void ASpinGameMode::SetLiftHeld(bool bHeld)
 		return;
 	}
 
-	// A press only counts as a lift if an obstacle is out. Reaching for the lift with nothing to
-	// hop over costs a life in Endless, and shows a message in the tutorial. Invincibility blocks
-	// the penalty just like every other mistake.
-	bool bValidPress = false;
-	if (bHeld && State == ESpinState::Playing && JamPhase != EJamPhase::Jammed && ObstaclesEnabled() && !bInvincible)
-	{
-		bValidPress = Clock && Clock->IsLiftAvailable();
-		if (!bValidPress)
-		{
-			if (IsTutorial())
-			{
-				ShowNotice(TEXT("Nothing to raise the hand over! In a real run that costs a life."));
-			}
-			else
-			{
-				LoseLife();
-			}
-		}
-	}
+	// The hand can be lifted at any time once obstacles are in play, obstacle or not. It costs
+	// points for as long as it's up (see Tick), and drops by itself after a full turn.
+	const bool bValidPress = bHeld && State == ESpinState::Playing && JamPhase != EJamPhase::Jammed && ObstaclesEnabled();
 
 	if (Clock)
 	{
@@ -535,23 +537,6 @@ void ASpinGameMode::OnObstacleCleared()
 		{
 			LifeGainedTime = GetWorld()->GetTimeSeconds();
 		}
-	}
-}
-
-void ASpinGameMode::LoseLife()
-{
-	Lives = FMath::Max(0, Lives - 1);
-
-	if (GetWorld())
-	{
-		LifeLostTime = GetWorld()->GetTimeSeconds();
-	}
-	Shake(LifeLostShake);
-
-	if (Lives <= 0)
-	{
-		bOutOfLives = true;
-		EndGame();
 	}
 }
 
@@ -616,8 +601,23 @@ int32 ASpinGameMode::GetNumActiveButtons() const
 		return FMath::Clamp(Level ? Level->NumButtons : 1, 1, FMath::Max(1, Prompts.Num()));
 	}
 
-	const int32 Wanted = (GetLevel() >= SecondButtonLevel) ? 2 : 1;
-	return FMath::Clamp(Wanted, 1, FMath::Max(1, Prompts.Num()));
+	int32 Wanted = 1;
+	while (Wanted < Prompts.Num() && GetLevel() >= GetButtonUnlockLevel(Wanted))
+	{
+		++Wanted;
+	}
+	return Wanted;
+}
+
+int32 ASpinGameMode::GetButtonUnlockLevel(int32 ButtonIndex) const
+{
+	switch (ButtonIndex)
+	{
+	case 0:  return 1;
+	case 1:  return SecondButtonLevel;
+	case 2:  return ThirdButtonLevel;
+	default: return MAX_int32; // no unlock level set: never in play
+	}
 }
 
 bool ASpinGameMode::ObstaclesEnabled() const
@@ -712,7 +712,7 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 	Points += LastHitPoints;
 
 	// Flash the moment this run overtakes the saved best (only once, and only if there is one).
-	if (BestPoints > 0 && OldPoints <= BestPoints && Points > BestPoints && GetWorld())
+	if (BestPoints > 0 && OldPoints <= BestPoints && Points > BestPoints && PassedBestPointsTime < 0.f && GetWorld())
 	{
 		PassedBestPointsTime = GetWorld()->GetTimeSeconds();
 	}
@@ -735,6 +735,7 @@ void ASpinGameMode::LoadSaveData()
 	{
 		SaveData = Cast<USpinSaveGame>(UGameplayStatics::CreateSaveGameObject(USpinSaveGame::StaticClass()));
 	}
+	bPlayStationIcons = SaveData && SaveData->bPlayStationIcons;
 }
 
 void ASpinGameMode::RecordRun()
@@ -921,6 +922,7 @@ void ASpinGameMode::StartGame()
 	bHandWasInZone = false;
 	bZoneTainted = false;
 	bTutorialObstacleHit = false;
+	LiftPointsDebt = 0.f;
 	ResetJam();
 	PlaceNextZone();
 }
@@ -940,7 +942,18 @@ void ASpinGameMode::OnHit()
 	RegisterHit();
 
 	const int32 NewLevel = GetLevel();
-	const bool bUnlocksSecondButton = OldLevel < SecondButtonLevel && NewLevel >= SecondButtonLevel && Prompts.Num() > 1;
+
+	// The newest button this hit brings into play, if any.
+	int32 UnlockedButton = INDEX_NONE;
+	for (int32 i = 1; i < Prompts.Num(); ++i)
+	{
+		const int32 UnlockLevel = GetButtonUnlockLevel(i);
+		if (OldLevel < UnlockLevel && NewLevel >= UnlockLevel)
+		{
+			UnlockedButton = i;
+		}
+	}
+	const bool bUnlocksButton = UnlockedButton != INDEX_NONE;
 	const bool bUnlocksObstacles = OldLevel < ObstacleStartLevel && NewLevel >= ObstacleStartLevel;
 	const bool bUnlocksJams = OldLevel < JamStartLevel && NewLevel >= JamStartLevel;
 
@@ -948,10 +961,10 @@ void ASpinGameMode::OnHit()
 	// that the player has seen them, and the "next level" heads-up plus the level banner's unlock line
 	// are enough. Only one screen at a time; if several land on the same level, the new-button
 	// screen wins, then obstacles, then jams.
-	const bool bSecondButtonIntro = bUnlocksSecondButton && BestLevel < SecondButtonLevel;
-	const bool bObstacleIntro = !bSecondButtonIntro && bUnlocksObstacles && BestLevel < ObstacleStartLevel;
-	const bool bJamIntro = !bSecondButtonIntro && !bObstacleIntro && bUnlocksJams && BestLevel < JamStartLevel;
-	const bool bPauseScreen = bSecondButtonIntro || bObstacleIntro || bJamIntro;
+	const bool bButtonIntro = bUnlocksButton && BestLevel < GetButtonUnlockLevel(UnlockedButton);
+	const bool bObstacleIntro = !bButtonIntro && bUnlocksObstacles && BestLevel < ObstacleStartLevel;
+	const bool bJamIntro = !bButtonIntro && !bObstacleIntro && bUnlocksJams && BestLevel < JamStartLevel;
+	const bool bPauseScreen = bButtonIntro || bObstacleIntro || bJamIntro;
 
 	// The normal "LEVEL N" banner is skipped when a pause screen takes over instead.
 	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
@@ -967,7 +980,7 @@ void ASpinGameMode::OnHit()
 	ZoneHalfWidth = FMath::Max(MinZoneHalfWidth, ZoneHalfWidth - ZoneShrinkPerHit * RampSteps);
 	bHandWasInZone = false;
 
-	// Pick which button the next zone needs (random once two buttons are in play).
+	// Pick which button the next zone needs (random once several buttons are in play).
 	PickNextPrompt();
 
 	// No new obstacle while a pause screen is about to take over.
@@ -980,19 +993,20 @@ void ASpinGameMode::OnHit()
 		StartJamSparks();
 	}
 
-	if (bUnlocksSecondButton)
+	if (bUnlocksButton)
 	{
-		// Second button just unlocked: reset the hand to its slowest speed and the zone to its
+		// A button just unlocked: reset the hand to its slowest speed and the zone to its
 		// widest, and make the very first zone need the new button - with or without the screen.
 		CurrentSpeed = StartSpeed;
 		ZoneHalfWidth = StartZoneHalfWidth;
-		ActivePromptIndex = 1;
+		ActivePromptIndex = UnlockedButton;
 		PromptStreak = 1;
 	}
 
-	if (bSecondButtonIntro)
+	if (bButtonIntro)
 	{
 		// Pause and wait for the player to press the new button.
+		NewButtonIndex = UnlockedButton;
 		State = ESpinState::NewButtonIntro;
 	}
 	else if (bObstacleIntro)
@@ -1015,21 +1029,25 @@ bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& Ou
 	if (Level == ObstacleStartLevel)
 	{
 		Titles.Add(TEXT("OBSTACLES"));
-		Hints.Add(TEXT("Hold LEFT CLICK / R2 to raise the hand over them"));
+		Hints.Add(TEXT("Hold {LIFT} to raise the hand over them"));
 	}
-	if (Level == SecondButtonLevel && Prompts.IsValidIndex(1))
+	static const TCHAR* ButtonTitles[] = { TEXT("FIRST BUTTON"), TEXT("SECOND BUTTON"), TEXT("THIRD BUTTON") };
+	for (int32 i = 1; i < Prompts.Num() && i < static_cast<int32>(UE_ARRAY_COUNT(ButtonTitles)); ++i)
 	{
-		Titles.Add(TEXT("SECOND BUTTON"));
-		Hints.Add(FString::Printf(TEXT("Zones can ask for %s too - match the colour"), *Prompts[1].Hint));
+		if (Level == GetButtonUnlockLevel(i))
+		{
+			Titles.Add(ButtonTitles[i]);
+			Hints.Add(FString::Printf(TEXT("Zones can ask for {%d} too - match the colour"), i));
+		}
 	}
 	if (Level == JamStartLevel && Prompts.IsValidIndex(0))
 	{
 		Titles.Add(TEXT("JAMS"));
-		Hints.Add(FString::Printf(TEXT("Sparks mean a jam is coming - mash %s to repair it"), *Prompts[0].Hint));
+		Hints.Add(TEXT("Sparks mean a jam is coming - mash {0} to repair it"));
 	}
 
 	OutTitle = FString::Join(Titles, TEXT("  +  "));
-	OutHint = FString::Join(Hints, TEXT("   |   "));
+	OutHint = ExpandKeys(FString::Join(Hints, TEXT("   |   ")));
 	return Titles.Num() > 0;
 }
 
@@ -1210,8 +1228,7 @@ void ASpinGameMode::HandleTutorialPress(int32 ButtonIndex)
 
 	if (ButtonIndex != ActivePromptIndex)
 	{
-		const FString Needed = Prompts.IsValidIndex(ActivePromptIndex) ? Prompts[ActivePromptIndex].Hint : FString();
-		ShowNotice(FString::Printf(TEXT("Wrong button! This zone needs %s."), *Needed));
+		ShowNotice(FString::Printf(TEXT("Wrong button! This zone needs {%d}."), ActivePromptIndex));
 		return;
 	}
 
@@ -1493,6 +1510,16 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		ApplyVolume();
 		break;
 
+	case EMenuAction::ToggleControllerIcons:
+		bPlayStationIcons = !bPlayStationIcons;
+		SetUsingGamepad(bUsingGamepad); // refresh InputStyle if a pad is in use
+		if (SaveData)
+		{
+			SaveData->bPlayStationIcons = bPlayStationIcons;
+			WriteSaveData();
+		}
+		break;
+
 	case EMenuAction::RetryGame:
 		if (IsGameOverMenuReady())
 		{
@@ -1594,6 +1621,59 @@ FString ASpinGameMode::GetResolutionLabel() const
 	return FString::Printf(TEXT("%d x %d"), Res.X, Res.Y);
 }
 
+FString ASpinGameMode::GetControllerIconsLabel() const
+{
+	return bPlayStationIcons ? TEXT("PLAYSTATION") : TEXT("XBOX");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Button names
+// ---------------------------------------------------------------------------------------------
+
+void ASpinGameMode::SetUsingGamepad(bool bGamepad)
+{
+	bUsingGamepad = bGamepad;
+	InputStyle = !bGamepad ? ESpinInputStyle::Keyboard
+		: bPlayStationIcons ? ESpinInputStyle::PlayStation
+		: ESpinInputStyle::Xbox;
+}
+
+FString ASpinGameMode::GetButtonKey(int32 ButtonIndex) const
+{
+	if (!Prompts.IsValidIndex(ButtonIndex))
+	{
+		return FString();
+	}
+
+	const FSpinPrompt& Prompt = Prompts[ButtonIndex];
+	switch (InputStyle)
+	{
+	case ESpinInputStyle::Xbox:        return Prompt.XboxButton;
+	case ESpinInputStyle::PlayStation: return Prompt.PlayStationButton;
+	default:                           return Prompt.KeyboardKey;
+	}
+}
+
+FString ASpinGameMode::GetLiftKey(bool bShort) const
+{
+	switch (InputStyle)
+	{
+	case ESpinInputStyle::Xbox:        return TEXT("RT");
+	case ESpinInputStyle::PlayStation: return TEXT("R2");
+	default:                           return bShort ? TEXT("LMB") : TEXT("LEFT CLICK");
+	}
+}
+
+FString ASpinGameMode::ExpandKeys(const FString& Text) const
+{
+	FString Result = Text.Replace(TEXT("{LIFT}"), *GetLiftKey(false));
+	for (int32 i = 0; i < Prompts.Num(); ++i)
+	{
+		Result.ReplaceInline(*FString::Printf(TEXT("{%d}"), i), *GetButtonKey(i));
+	}
+	return Result;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Jam
 // ---------------------------------------------------------------------------------------------
@@ -1641,7 +1721,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 			}
 			if (IsTutorial())
 			{
-				ShowNotice(FString::Printf(TEXT("Jammed! Press %s again and again to fix it."), *Prompts[0].Hint));
+				ShowNotice(TEXT("Jammed! Press {0} again and again to fix it."));
 			}
 		}
 		return;

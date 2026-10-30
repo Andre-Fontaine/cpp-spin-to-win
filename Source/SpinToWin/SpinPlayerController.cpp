@@ -86,6 +86,21 @@ bool ASpinPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	// the bindings below (otherwise typing W or D would also count as a button press). The mouse
 	// still reaches the OK / CANCEL buttons.
 	ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+
+	// The on-screen button names follow whichever device was used last. Analog input only counts
+	// once it's deliberate, so a drifting stick or a nudged mouse doesn't flip the prompts.
+	if (GM)
+	{
+		const bool bAnalog = Params.Key.IsAxis1D() || Params.Key.IsAxis2D();
+		const bool bDeliberate = bAnalog
+			? FMath::Abs(Params.AmountDepressed) > (Params.Key.IsGamepadKey() ? 0.5f : 3.f)
+			: Params.Event == IE_Pressed;
+		if (bDeliberate)
+		{
+			GM->SetUsingGamepad(Params.Key.IsGamepadKey());
+		}
+	}
+
 	if (GM && GM->State == ESpinState::NameEntry && !Params.Key.IsMouseButton() && !Params.Key.IsGamepadKey())
 	{
 		if (Params.Event == IE_Pressed || Params.Event == IE_Repeat)
@@ -162,6 +177,10 @@ void ASpinPlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &ASpinPlayerController::OnButton1);
 	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &ASpinPlayerController::OnButton1);
 
+	// Hit button 2
+	InputComponent->BindKey(EKeys::A, IE_Pressed, this, &ASpinPlayerController::OnButton2);
+	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &ASpinPlayerController::OnButton2);
+
 	// Lift: hold to keep the hand raised.
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ASpinPlayerController::OnLiftPressed);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ASpinPlayerController::OnLiftReleased);
@@ -177,6 +196,11 @@ void ASpinPlayerController::OnButton0()
 void ASpinPlayerController::OnButton1()
 {
 	PressButton(1);
+}
+
+void ASpinPlayerController::OnButton2()
+{
+	PressButton(2);
 }
 
 void ASpinPlayerController::OnLiftPressed()

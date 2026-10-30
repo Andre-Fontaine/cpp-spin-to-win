@@ -10,6 +10,7 @@
  * Maps physical inputs to game actions and forwards them to the game mode.
  *   Hit button 0: W / Gamepad A (Cross)
  *   Hit button 1: D / Gamepad B (Circle)
+ *   Hit button 2: A / Gamepad X (Square)
  *   Lift (hold):  Left Mouse Button / Gamepad Right Trigger (R2)
  *
  * The same Left Mouse Button also drives the menus: on the menu screens (main menu, mode select,
@@ -34,6 +35,7 @@ protected:
 private:
 	void OnButton0();
 	void OnButton1();
+	void OnButton2();
 	void OnLiftPressed();
 	void OnLiftReleased();
 	void PressButton(int32 ButtonIndex);

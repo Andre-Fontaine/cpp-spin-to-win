@@ -46,7 +46,7 @@ struct FObstacleState
 	/** Once RemainingDeg drops below minus this, the hand has fully cleared the obstacle. */
 	float PassMarginDeg = 0.f;
 
-	/** True once the hand has fully passed this obstacle. The lift switches off. */
+	/** True once the hand has fully passed this obstacle. */
 	bool bPassed = false;
 };
 
@@ -69,12 +69,15 @@ public:
 
 	// ---------------- Lift ----------------
 
-	/** Tell the clock the lift button was pressed or released. bValidPress says the press began
-	 *  while an obstacle was out. Only valid presses raise the hand, and it drops by itself once
-	 *  the obstacle has been passed (the button must be pressed again for the next one). */
+	/** Tell the clock the lift button was pressed or released. bValidPress says lifting is allowed
+	 *  right now (playing, not jammed). Only valid presses raise the hand, and it drops by itself
+	 *  after MaxLiftTravelDeg of hand travel (the button must be pressed again to lift again). */
 	void SetLiftHeld(bool bHeld, bool bValidPress);
 
-	/** True while an obstacle is out and the hand hasn't passed it yet, i.e. lifting is allowed. */
+	/** True while the lift is in effect: held from a valid press and not yet timed out. */
+	bool IsLiftActive() const;
+
+	/** True while an obstacle is out and the hand hasn't passed it yet, i.e. there's something to lift over. */
 	bool IsLiftAvailable() const;
 
 	/** True when the hand is lifted clearly off the dial (it turns cyan). Hitting zones works at any height. */
@@ -94,7 +97,8 @@ public:
 
 	// ---------------- Jam ----------------
 
-	/** Sparks shower off the whole hand (and it flickers hot orange) as a jam warning. */
+	/** Jam warning: the gears in the hub pillar catch, throwing bursts of sparks and making it glow
+	 *  hot, and the hand flickers hot orange. */
 	void SetSparking(bool bSparking);
 
 	/** A jammed hand tilts and turns orange-brown ("broken") while it keeps spinning. */
@@ -167,6 +171,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
 	float LiftLowerSpeed = 1000.f;
 
+	/** One lift lasts at most this many degrees of hand travel (360 = one full turn), then the
+	 *  hand drops by itself even if the button is still held. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift", meta = (ClampMin = "1"))
+	float MaxLiftTravelDeg = 360.f;
+
 	/** Above this height the hand counts as "raised" (only changes its colour). */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
 	float RaisedThreshold = 40.f;
@@ -222,13 +231,15 @@ private:
 	void UpdateZone(const ASpinGameMode& GM);
 	void UpdateColors(const ASpinGameMode& GM);
 	void UpdateObstacles(float DeltaSeconds);
-	void UpdateObstaclePassing(ASpinGameMode& GM);
+	void UpdateObstaclePassing(ASpinGameMode& GM, float Moved);
 	void UpdateShake(float DeltaSeconds);
 	void UpdateSparks(float DeltaSeconds);
 
 	static constexpr int32 NumZoneSegments = 48;
 	static constexpr int32 NumObstacleSlots = 4;
 	static constexpr int32 NumSparks = 80;
+	/** Radius of the hub pillar at the centre, as a fraction of the dial radius. */
+	static constexpr float HubRadiusFraction = 0.06f;
 	static constexpr int32 NumRingSegments = 90;
 
 	UPROPERTY()
@@ -293,6 +304,9 @@ private:
 	TObjectPtr<UMaterialInstanceDynamic> HandMID;
 
 	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> HubMID;
+
+	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> ObstacleMID;
 
 	TWeakObjectPtr<ASpinGameMode> GameMode;
@@ -308,7 +322,10 @@ private:
 		float Life = 0.f; // 0 = unused
 	};
 	TArray<FSpark> Sparks;
-	float SparkSpawnAccumulator = 0.f;
+	/** Seconds until the gears next catch and throw a burst of sparks. */
+	float GrindBurstTimer = 0.f;
+	/** 1 at a catch, fading to 0: drives the pillar's hot glow and the hand's snag. */
+	float GrindFlash = 0.f;
 	bool bSparking = false;
 	bool bJammed = false;
 	float JamWobbleTime = 0.f;
@@ -318,6 +335,8 @@ private:
 
 	bool bLiftHeld = false;
 	bool bLiftPressValid = false;
+	/** Degrees the hand has travelled during the current lift. */
+	float LiftTravelDeg = 0.f;
 	float PrevHandAngle = 0.f;
 	float ShakeAmount = 0.f;
 	float LastZoneCenter = -1000.f;

@@ -83,6 +83,8 @@ enum class EMenuAction : uint8
 	ResolutionNext,
 	VolumeDown,
 	VolumeUp,
+	/** Switches the gamepad prompts between Xbox and PlayStation names. */
+	ToggleControllerIcons,
 	RetryGame,
 	ReturnToMainMenu,
 	QuitGame,
@@ -126,19 +128,31 @@ enum class ETutorialConfirm : uint8
 	Lift
 };
 
+/** Which device's button names the on-screen prompts show. */
+UENUM(BlueprintType)
+enum class ESpinInputStyle : uint8
+{
+	Keyboard,
+	Xbox,
+	PlayStation
+};
+
 /** One button the player can be asked to press. Index in the Prompts array = button index. */
 USTRUCT(BlueprintType)
 struct FSpinPrompt
 {
 	GENERATED_BODY()
 
-	/** Short text drawn on the target zone, e.g. "W". */
+	/** What the button is called on each device, e.g. "W", "A", "X". The HUD shows whichever
+	 *  matches the input the player is using (see ASpinGameMode::GetButtonKey). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
-	FString Label;
+	FString KeyboardKey;
 
-	/** Longer text for the on-screen hint, e.g. "W / A / X". */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
-	FString Hint;
+	FString XboxButton;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
+	FString PlayStationButton;
 
 	/** Colour of the target zone when this button is required. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spin")
@@ -179,7 +193,7 @@ struct FTutorialLevel
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
 	float ZoneHalfWidth = 45.f;
 
-	/** How many buttons are in play (1 or 2). */
+	/** How many buttons are in play (1 to 3). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial")
 	int32 NumButtons = 1;
 
@@ -220,7 +234,7 @@ public:
 	virtual void StartPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
-	/** Called by the player controller. ButtonIndex 0 = first button, 1 = second button. */
+	/** Called by the player controller. ButtonIndex 0 = first button, 1 = second, 2 = third. */
 	void HandleButtonPressed(int32 ButtonIndex);
 
 	/** Called by the player controller when the lift button is pressed or released. */
@@ -244,6 +258,23 @@ public:
 
 	FString GetQualityLabel() const;
 	FString GetResolutionLabel() const;
+	FString GetControllerIconsLabel() const;
+
+	// ---------------- Button names ----------------
+
+	/** Called by the player controller whenever the player switches between keyboard/mouse and a gamepad. */
+	void SetUsingGamepad(bool bGamepad);
+
+	/** A button's name on the input the player is using right now, e.g. "W", "A" or "X". */
+	FString GetButtonKey(int32 ButtonIndex) const;
+
+	/** The lift's name on the input in use. Short for key caps ("LMB"), long for sentences ("LEFT CLICK"). */
+	FString GetLiftKey(bool bShort = true) const;
+
+	/** Replaces button tokens in text meant for the screen with the names for the input in use:
+	 *  {0} {1} {2} = the buttons, {LIFT} = the lift. Text that names buttons is written with these
+	 *  tokens so it always matches whatever the player is holding. */
+	FString ExpandKeys(const FString& Text) const;
 
 	// ---------------- Tutorial ----------------
 
@@ -335,24 +366,29 @@ public:
 	/** The level at which the second button is introduced. Its explanation screen (like the
 	 *  obstacle and jam ones) only shows until the saved best run has reached that level. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
-	int32 SecondButtonLevel = 5;
+	int32 SecondButtonLevel = 4;
+
+	/** The level at which the third button is introduced (same rules as SecondButtonLevel). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
+	int32 ThirdButtonLevel = 6;
 
 	/** How long the "LEVEL N" banner stays on screen, in seconds. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels")
 	float LevelBannerDuration = 1.5f;
 
-	/** The buttons in the game. Index 0 is always available; index 1 unlocks at SecondButtonLevel. */
+	/** The buttons in the game. Index 0 is always available; index 1 unlocks at SecondButtonLevel
+	 *  and index 2 at ThirdButtonLevel. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels")
 	TArray<FSpinPrompt> Prompts;
 
-	/** Once two buttons are in play, the same button can come up at most this many times in a row. */
+	/** Once several buttons are in play, the same button can come up at most this many times in a row. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Levels", meta = (ClampMin = "1"))
 	int32 MaxSameButtonInRow = 3;
 
 	// ---------------- Obstacles ----------------
 
 	/** Endless: the level at which obstacles (and the lift) are introduced.
-	 *  If this equals SecondButtonLevel, the new-button screen is shown and the obstacle screen is skipped. */
+	 *  If a button also unlocks on this level, the new-button screen is shown and the obstacle screen is skipped. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
 	int32 ObstacleStartLevel = 2;
 
@@ -379,6 +415,10 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
 	float ObstacleMaxRadiusFraction = 0.88f;
+
+	/** Endless: points lost per second while the hand is lifted. The score never drops below 0. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0"))
+	float LiftPointsPerSecond = 50.f;
 
 	/** Lives the player starts a run with. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
@@ -543,6 +583,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 ActivePromptIndex = 0;
 
+	/** The button the new-button screen (ESpinState::NewButtonIntro) is introducing. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 NewButtonIndex = 1;
+
 	/** World time of the last level-up, used for the banner. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float LevelUpTime = -1000.f;
@@ -642,6 +686,15 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
 	int32 VolumePercent = 100;
 
+	/** Gamepad prompts use PlayStation names instead of Xbox ones. Windows can't reliably tell the
+	 *  two pads apart, so this is a setting (saved with the profiles) rather than detected. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
+	bool bPlayStationIcons = false;
+
+	/** The input the player used last, which decides the names shown for buttons. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	ESpinInputStyle InputStyle = ESpinInputStyle::Keyboard;
+
 	bool IsTutorial() const;
 
 	/** The tutorial level being played, or null. */
@@ -660,7 +713,10 @@ public:
 	/** Hits needed to clear one particular Endless level. */
 	int32 GetHitsForLevel(int32 Level) const;
 
-	/** What unlocks at an Endless level (obstacles, the second button, jams): a short title and a
+	/** Endless level at which a button (index into Prompts) unlocks. Button 0 is there from level 1. */
+	int32 GetButtonUnlockLevel(int32 ButtonIndex) const;
+
+	/** What unlocks at an Endless level (obstacles, new buttons, jams): a short title and a
 	 *  one-line how-to, joined if several land on the same level. False if nothing unlocks there. */
 	bool GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& OutHint) const;
 
@@ -708,7 +764,6 @@ private:
 	void Fail(ESpinMistake Mistake);
 	void EndGame();
 	void ResumeAfterIntro();
-	void LoseLife();
 	void RegisterHit();
 	void QuitGame();
 
@@ -766,6 +821,12 @@ private:
 
 	bool bHandWasInZone = false;
 	float GameOverTime = 0.f;
+
+	/** Whether the last input came from a gamepad (InputStyle then follows bPlayStationIcons). */
+	bool bUsingGamepad = false;
+
+	/** Fraction of a point the lift has cost but not yet taken off the score. */
+	float LiftPointsDebt = 0.f;
 
 	/** How many zones in a row have needed the current button. */
 	int32 PromptStreak = 1;

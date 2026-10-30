@@ -78,6 +78,10 @@ public:
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 ActiveProfile = INDEX_NONE;
 
+	/** Settings choice: gamepad prompts show PlayStation names instead of Xbox ones. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	bool bPlayStationIcons = false;
+
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	TArray<FSpinRunRecord> LevelBoard;
 

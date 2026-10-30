@@ -125,7 +125,7 @@ void ASpinClock::BuildVisuals()
 
 	// Sizes: the engine's cylinder and cube are 100 units across, so scale = size / 100.
 	const float RimThickness = 20.f;
-	const float HubRadius = R * 0.06f;
+	const float HubRadius = R * HubRadiusFraction;
 	const float HubHeight = 14.f;
 	const float HandLength = R * HandLengthFraction;
 
@@ -168,7 +168,7 @@ void ASpinClock::BuildVisuals()
 
 	MakeMID(Rim, FLinearColor(0.12f, 0.13f, 0.17f));
 	MakeMID(Dial, FLinearColor(0.03f, 0.04f, 0.07f));
-	MakeMID(Hub, FLinearColor(0.9f, 0.9f, 0.9f));
+	HubMID = MakeMID(Hub, FLinearColor(0.9f, 0.9f, 0.9f));
 	HandMID = MakeMID(Hand, FLinearColor::White);
 
 	if (BaseMaterial)
@@ -257,20 +257,31 @@ void ASpinClock::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// How far the hand moved since last frame. A big jump is a reset (new run), not real travel.
+	float Moved = 0.f;
 	if (ASpinGameMode* GM = GameMode.Get())
 	{
-		UpdateObstaclePassing(*GM);
+		Moved = FMath::Abs(FMath::FindDeltaAngleDegrees(PrevHandAngle, GM->HandAngle));
+		PrevHandAngle = GM->HandAngle;
+		if (Moved > 45.f)
+		{
+			Moved = 0.f;
+		}
+		UpdateObstaclePassing(*GM, Moved);
 	}
 
-	// Lift: only possible while an obstacle is out and not yet passed. The hand rises while the
-	// button is held, and drops by itself (even if still held) once the obstacle is behind it.
-	// A lift only counts if it was started while an obstacle was out. Once that obstacle is behind
-	// the hand the lift is spent, and the button has to be pressed again for the next one.
-	if (bLiftPressValid && !IsLiftAvailable())
+	// Lift: the hand rises while the button is held, whether or not an obstacle is out. It drops
+	// by itself (even if still held) once it has been carried a full turn, and the button has to
+	// be pressed again to lift it for the next obstacle.
+	if (IsLiftActive())
 	{
-		bLiftPressValid = false;
+		LiftTravelDeg += Moved;
+		if (LiftTravelDeg >= MaxLiftTravelDeg)
+		{
+			bLiftPressValid = false;
+		}
 	}
-	const bool bRaise = bLiftHeld && bLiftPressValid;
+	const bool bRaise = IsLiftActive();
 	const float LiftTarget = bRaise ? MaxHandLift : 0.f;
 	HandLift = FMath::FInterpConstantTo(HandLift, LiftTarget, DeltaSeconds, bRaise ? LiftRiseSpeed : LiftLowerSpeed);
 
@@ -284,6 +295,11 @@ void ASpinClock::Tick(float DeltaSeconds)
 			HandRotation.Pitch = 9.f;
 			HandRotation.Roll = 7.f;
 			HandRotation.Yaw += FMath::Sin(JamWobbleTime * 45.f) * 1.5f;
+		}
+		else
+		{
+			// Each catch of the gears makes the hand snag for a moment (visual only).
+			HandRotation.Yaw -= GM->Direction * GrindFlash * 1.2f;
 		}
 		HandPivot->SetRelativeRotation(HandRotation);
 		HandPivot->SetRelativeLocation(FVector(0.f, 0.f, HandLift));
@@ -317,35 +333,56 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 	// however big the dial is (at the original 1-6 unit size they were about a pixel on screen).
 	const float SizeScale = DialRadius / 600.f;
 	const ASpinGameMode* GM = GameMode.Get();
-	const float HandAngleRad = GM ? FMath::DegreesToRadians(GM->HandAngle) : 0.f;
-	const float HandLength = DialRadius * HandLengthFraction;
+	const float SpinSign = GM ? GM->Direction : 1.f;
+	const float HubRadius = DialRadius * HubRadiusFraction;
 
-	// Emit new sparks along the whole hand while sparking - the bit the player is already watching.
+	// Gears catching inside the hub pillar: irregular bursts of streaks thrown off one point of its
+	// rim, tangentially (the way a grinding edge throws them), rather than a constant shower.
 	if (bSparking)
 	{
-		SparkSpawnAccumulator += DeltaSeconds * 110.f; // sparks per second
-		while (SparkSpawnAccumulator >= 1.f)
+		GrindBurstTimer -= DeltaSeconds;
+		if (GrindBurstTimer <= 0.f)
 		{
-			SparkSpawnAccumulator -= 1.f;
+			GrindBurstTimer = FMath::FRandRange(0.12f, 0.45f);
+			GrindFlash = 1.f;
+
+			const float ContactAngle = FMath::FRandRange(0.f, 2.f * PI);
+			const int32 Count = FMath::RandRange(5, 10);
+			int32 Spawned = 0;
 			for (FSpark& S : Sparks)
 			{
-				if (S.Life <= 0.f)
+				if (Spawned >= Count)
 				{
-					S.Age = 0.f;
-					S.Life = FMath::FRandRange(0.3f, 0.6f);
-					const float AlongHand = FMath::FRandRange(0.05f, 1.f) * HandLength;
-					S.Location = FVector(FMath::Cos(HandAngleRad) * AlongHand, FMath::Sin(HandAngleRad) * AlongHand, HandLift + 3.f + HandHeight);
-					const float Angle = FMath::FRandRange(0.f, 2.f * PI);
-					const float Speed = FMath::FRandRange(120.f, 380.f) * SizeScale;
-					S.Velocity = FVector(FMath::Cos(Angle) * Speed, FMath::Sin(Angle) * Speed, FMath::FRandRange(200.f, 480.f) * SizeScale);
 					break;
 				}
+				if (S.Life > 0.f)
+				{
+					continue;
+				}
+				++Spawned;
+
+				const float A = ContactAngle + FMath::FRandRange(-0.35f, 0.35f);
+				const FVector Radial(FMath::Cos(A), FMath::Sin(A), 0.f);
+				const FVector Tangent = FVector(-Radial.Y, Radial.X, 0.f) * SpinSign;
+				const FVector Dir = (Tangent + Radial * FMath::FRandRange(0.1f, 0.7f)).GetSafeNormal();
+
+				S.Age = 0.f;
+				S.Life = FMath::FRandRange(0.18f, 0.4f);
+				S.Location = Radial * HubRadius + FVector(0.f, 0.f, FMath::FRandRange(4.f, 14.f));
+				S.Velocity = Dir * FMath::FRandRange(280.f, 600.f) * SizeScale + FVector(0.f, 0.f, FMath::FRandRange(60.f, 240.f) * SizeScale);
 			}
 		}
 	}
 	else
 	{
-		SparkSpawnAccumulator = 0.f;
+		GrindBurstTimer = 0.f;
+	}
+	GrindFlash = FMath::Max(0.f, GrindFlash - DeltaSeconds * 6.f);
+
+	// The pillar glows hot with each catch, then cools.
+	if (HubMID)
+	{
+		HubMID->SetVectorParameterValue(ColorParam, FMath::Lerp(FLinearColor(0.9f, 0.9f, 0.9f), FLinearColor(1.f, 0.45f, 0.08f), GrindFlash));
 	}
 
 	// Move and shrink the live ones.
@@ -374,10 +411,14 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 			S.Velocity.Z = FMath::Abs(S.Velocity.Z) * 0.3f;
 		}
 
-		const float Size = (14.f * (1.f - S.Age / S.Life) + 4.f) * SizeScale;
+		// Thin streaks pointing along their flight, shrinking as they cool - not tumbling glitter.
+		const float Fade = 1.f - S.Age / S.Life;
+		const float Length = (26.f * Fade + 6.f) * SizeScale;
+		const float Thickness = (4.f * Fade + 2.f) * SizeScale;
 		Mesh->SetVisibility(true);
 		Mesh->SetRelativeLocation(S.Location);
-		Mesh->SetRelativeScale3D(FVector(Size / 100.f));
+		Mesh->SetRelativeRotation(S.Velocity.Rotation());
+		Mesh->SetRelativeScale3D(FVector(Length, Thickness, Thickness) / 100.f);
 	}
 }
 
@@ -489,8 +530,18 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 
 void ASpinClock::SetLiftHeld(bool bHeld, bool bValidPress)
 {
+	// A fresh press starts a fresh lift; releasing (or holding on) doesn't.
+	if (bHeld && !bLiftHeld)
+	{
+		LiftTravelDeg = 0.f;
+	}
 	bLiftHeld = bHeld;
 	bLiftPressValid = bHeld && bValidPress;
+}
+
+bool ASpinClock::IsLiftActive() const
+{
+	return bLiftHeld && bLiftPressValid;
 }
 
 bool ASpinClock::IsHandRaised() const
@@ -518,13 +569,9 @@ bool ASpinClock::IsLiftAvailable() const
 	return false;
 }
 
-void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM)
+void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM, float Moved)
 {
-	// How far the hand moved since last frame. A big jump is a reset (new run), not real travel.
-	float Moved = FMath::Abs(FMath::FindDeltaAngleDegrees(PrevHandAngle, GM.HandAngle));
-	PrevHandAngle = GM.HandAngle;
-
-	if (GM.State != ESpinState::Playing || bJammed || Moved > 45.f)
+	if (GM.State != ESpinState::Playing || bJammed || Moved <= 0.f)
 	{
 		return;
 	}
@@ -540,7 +587,7 @@ void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM)
 		S.RemainingDeg -= Moved;
 		if (S.RemainingDeg <= -S.PassMarginDeg)
 		{
-			S.bPassed = true; // the hand is fully beyond it: the lift switches off
+			S.bPassed = true; // the hand is fully beyond it
 			GM.OnObstacleCleared(); // it got over the obstacle, so the player earns a life back
 		}
 	}
@@ -570,7 +617,7 @@ void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float Ahead
 		S.Elapsed = 0.f;
 		S.Phase = EObstaclePhase::SlidingIn;
 
-		// Track how far the hand still has to go, so the lift can switch off once it has passed.
+		// Track how far the hand still has to go, so passing it can be detected.
 		const float Reach = ObstacleRadius + HandWidth * 0.5f;
 		S.RemainingDeg = AheadDeg;
 		S.PassMarginDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(Reach / FMath::Max(Rho, 1.f), 0.f, 1.f))) + 3.f;

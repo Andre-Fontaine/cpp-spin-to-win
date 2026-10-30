@@ -41,7 +41,6 @@ namespace
 	constexpr float Margin = 28.f;
 	constexpr float Pad = 16.f;
 
-	const TCHAR* LiftKey = TEXT("LMB / R2");
 
 	FLinearColor Fade(FLinearColor Color, float Alpha)
 	{
@@ -72,16 +71,10 @@ namespace
 		return T < 0.5f ? FMath::Lerp(Cyan, Gold, T * 2.f) : FMath::Lerp(Gold, Red, (T - 0.5f) * 2.f);
 	}
 
-	/** Full hint for a button ("W / A / X"), for instructions. */
+	/** A button's name on the input in use ("W", "A" or "X"). */
 	FString KeyHintOf(const ASpinGameMode& GM, int32 Index)
 	{
-		return GM.Prompts.IsValidIndex(Index) ? GM.Prompts[Index].Hint : FString();
-	}
-
-	/** Short label for a button ("W"), for the key caps on menu buttons. */
-	FString KeyLabelOf(const ASpinGameMode& GM, int32 Index)
-	{
-		return GM.Prompts.IsValidIndex(Index) ? GM.Prompts[Index].Label : FString();
+		return GM.GetButtonKey(Index);
 	}
 
 	FLinearColor KeyColorOf(const ASpinGameMode& GM, int32 Index)
@@ -130,18 +123,22 @@ void ASpinHUD::DrawHUD()
 	case ESpinState::TutorialComplete: DrawTutorialComplete(*GM); break;
 
 	case ESpinState::NewButtonIntro:
-		if (GM->Prompts.IsValidIndex(1))
+		if (GM->Prompts.IsValidIndex(GM->NewButtonIndex))
 		{
-			const FSpinPrompt& First = GM->Prompts[0];
-			const FSpinPrompt& Second = GM->Prompts[1];
-			DrawBriefing(TEXT("NEW MECHANIC"), TEXT("SECOND BUTTON"),
-				{
-					{ TEXT("From now on each zone asks for one of two buttons, at random. Match the zone's colour:"), TextMain },
-					{ First.Hint, First.Color },
-					{ Second.Hint, Second.Color },
-					{ TEXT("The hand has slowed down and the zones are wide again, so you can get used to it."), TextDim },
-				},
-				TEXT("Press"), Second.Hint, Second.Color);
+			// Every button now in play, in its zone colour, with the new one last.
+			const int32 NumButtons = GM->NewButtonIndex + 1;
+			const FSpinPrompt& New = GM->Prompts[GM->NewButtonIndex];
+			TArray<FSpinBriefLine> Lines;
+			Lines.Add({ FString::Printf(TEXT("From now on each zone asks for one of %s buttons, at random. Match the zone's colour:"),
+				NumButtons == 2 ? TEXT("two") : TEXT("three")), TextMain });
+			for (int32 i = 0; i < NumButtons; ++i)
+			{
+				Lines.Add({ GM->GetButtonKey(i), GM->Prompts[i].Color });
+			}
+			Lines.Add({ TEXT("The hand has slowed down and the zones are wide again, so you can get used to it."), TextDim });
+
+			DrawBriefing(TEXT("NEW MECHANIC"), NumButtons == 2 ? TEXT("SECOND BUTTON") : TEXT("THIRD BUTTON"),
+				Lines, TEXT("Press"), GM->GetButtonKey(GM->NewButtonIndex), New.Color);
 		}
 		break;
 
@@ -149,11 +146,11 @@ void ASpinHUD::DrawHUD()
 		DrawBriefing(TEXT("NEW MECHANIC"), TEXT("OBSTACLES"),
 			{
 				{ TEXT("Posts will slide onto the dial. Don't let the hand touch them."), TextMain },
-				{ FString::Printf(TEXT("HOLD %s to raise the hand over them."), LiftKey), Cyan },
-				{ TEXT("It only works while an obstacle is out, and drops by itself once you're past it."), TextDim },
-				{ FString::Printf(TEXT("You have %d lives. Raising the hand with nothing to clear costs one; hopping an obstacle earns one back."), GM->MaxLives), FLinearColor(1.f, 0.65f, 0.65f) },
+				{ FString::Printf(TEXT("HOLD %s to raise the hand over them."), *GM->GetLiftKey(false)), Cyan },
+				{ TEXT("You lose points while the hand is up, and it drops by itself after one full turn."), TextDim },
+				{ FString::Printf(TEXT("You have %d lives. Hitting an obstacle costs one; hopping one earns one back."), GM->MaxLives), FLinearColor(1.f, 0.65f, 0.65f) },
 			},
-			TEXT("Hold"), LiftKey, Cyan);
+			TEXT("Hold"), GM->GetLiftKey(), Cyan);
 		break;
 
 	case ESpinState::JamIntro:
@@ -177,7 +174,7 @@ void ASpinHUD::DrawHUD()
 			TArray<FSpinBriefLine> Lines;
 			for (const FString& Line : Level->IntroLines)
 			{
-				Lines.Add({ Line, TextMain });
+				Lines.Add({ GM->ExpandKeys(Line), TextMain });
 			}
 
 			const FString Eyebrow = FString::Printf(TEXT("TUTORIAL  -  STAGE %d / %d"), GM->TutorialIndex + 1, GM->TutorialLevels.Num());
@@ -190,7 +187,7 @@ void ASpinHUD::DrawHUD()
 				DrawBriefing(Eyebrow, Level->Title, Lines, TEXT("Press"), KeyHintOf(*GM, 1), KeyColorOf(*GM, 1));
 				break;
 			case ETutorialConfirm::Lift:
-				DrawBriefing(Eyebrow, Level->Title, Lines, TEXT("Hold"), LiftKey, Cyan);
+				DrawBriefing(Eyebrow, Level->Title, Lines, TEXT("Hold"), GM->GetLiftKey(), Cyan);
 				break;
 			}
 		}
@@ -452,14 +449,28 @@ void ASpinHUD::DrawMenuButton(float X, float Y, float W, float H, const FString&
 	DrawOutline(X, Y, W, H, Fade(bHover ? Accent : PanelEdge, Opacity), FMath::Max(1.f, U(bHover ? 2.f : 1.f)));
 	DrawRect(Fade(Accent, (bHover ? 1.f : 0.75f) * Opacity), X, Y, FMath::Max(2.f, U(4.f)), H);
 
-	const float LabelSize = H >= U(60.f) ? 24.f : 20.f;
-	DrawLabel(Label, X + W * 0.5f, Y + (H - LineH(LabelSize)) * 0.5f, LabelSize, Fade(TextMain, Opacity), ESpinTextAlign::Center, true);
+	// The label is centred in the space the key cap (if any) leaves free, and shrinks until it fits
+	// there, so the two never overlap on narrow buttons.
+	const float KeySize = 13.f;
+	const float KeyW = KeyHint.IsEmpty() ? 0.f : KeyCapWidth(KeyHint, KeySize);
+	const float KeyX = X + W - U(12.f) - KeyW;
+	const float LabelLeft = X + U(12.f);
+	const float LabelRight = KeyHint.IsEmpty() ? X + W - U(12.f) : KeyX - U(8.f);
+	const float LabelRoom = LabelRight - LabelLeft;
+
+	float LabelSize = H >= U(60.f) ? 24.f : 20.f;
+	while (LabelSize > 12.f && MeasureText(Label, LabelSize, true).X > LabelRoom)
+	{
+		LabelSize -= 1.f;
+	}
+	// Stay centred on the whole button when the label fits there without reaching the key cap.
+	const float LabelW = MeasureText(Label, LabelSize, true).X;
+	const float LabelCX = (X + W * 0.5f + LabelW * 0.5f <= LabelRight) ? X + W * 0.5f : (LabelLeft + LabelRight) * 0.5f;
+	DrawLabel(Label, LabelCX, Y + (H - LineH(LabelSize)) * 0.5f, LabelSize, Fade(TextMain, Opacity), ESpinTextAlign::Center, true);
 
 	if (!KeyHint.IsEmpty())
 	{
-		const float KeySize = 13.f;
-		const float KeyW = KeyCapWidth(KeyHint, KeySize);
-		DrawKeyCap(KeyHint, X + W - U(12.f) - KeyW, Y + (H - KeyCapHeight(KeySize)) * 0.5f, KeySize, Fade(Accent, Opacity), false);
+		DrawKeyCap(KeyHint, KeyX, Y + (H - KeyCapHeight(KeySize)) * 0.5f, KeySize, Fade(Accent, Opacity), false);
 	}
 
 	if (bEnabled)
@@ -548,11 +559,12 @@ void ASpinHUD::DrawZoneLabel(const ASpinGameMode& GM)
 
 	// A key cap riding on the zone itself; it lights up while the hand is inside - "press now".
 	const FSpinPrompt& Prompt = GM.Prompts[GM.ActivePromptIndex];
+	const FString Key = GM.GetButtonKey(GM.ActivePromptIndex);
 	const FVector Screen = Project(Clock->GetZoneWorldLocation(0.5f));
 	const float Size = 20.f;
-	const float W = KeyCapWidth(Prompt.Label, Size);
+	const float W = KeyCapWidth(Key, Size);
 	const float H = KeyCapHeight(Size);
-	DrawKeyCap(Prompt.Label, Screen.X - W * 0.5f, Screen.Y - H * 0.5f, Size, Prompt.Color, GM.IsHandInZone());
+	DrawKeyCap(Key, Screen.X - W * 0.5f, Screen.Y - H * 0.5f, Size, Prompt.Color, GM.IsHandInZone());
 }
 
 void ASpinHUD::DrawRunModule(const ASpinGameMode& GM, float X, float Y)
@@ -794,7 +806,7 @@ void ASpinHUD::DrawControlStrip(const ASpinGameMode& GM, float CenterX, float Bo
 		if (GM.Prompts.IsValidIndex(i))
 		{
 			const bool bThisZone = i == GM.ActivePromptIndex && !GM.bInvincible;
-			Items.Add({ GM.Prompts[i].Hint, bThisZone ? TEXT("THIS ZONE") : TEXT(""), GM.Prompts[i].Color, GM.Prompts[i].Color, bThisZone });
+			Items.Add({ GM.GetButtonKey(i), bThisZone ? TEXT("THIS ZONE") : TEXT(""), GM.Prompts[i].Color, GM.Prompts[i].Color, bThisZone });
 		}
 	}
 
@@ -803,15 +815,18 @@ void ASpinHUD::DrawControlStrip(const ASpinGameMode& GM, float CenterX, float Bo
 	{
 		const ASpinClock* Clock = GM.GetClock();
 		const bool bLiftNow = Clock && Clock->IsLiftAvailable() && !GM.bInvincible;
-		Items.Add({ FString::Printf(TEXT("HOLD  %s"), LiftKey),
-			bLiftNow ? TEXT("LIFT NOW!") : TEXT("LIFT  -  only over obstacles"),
+		const TCHAR* IdleCaption = (Clock && Clock->IsLiftActive() && !GM.IsTutorial())
+			? TEXT("LIFTED  -  losing points")
+			: TEXT("LIFT  -  costs points while up");
+		Items.Add({ FString::Printf(TEXT("HOLD  %s"), *GM.GetLiftKey()),
+			bLiftNow ? TEXT("LIFT NOW!") : IdleCaption,
 			bLiftNow ? Cyan : Fade(Cyan, 0.6f),
 			bLiftNow ? Fade(Cyan, FMath::Lerp(0.6f, 1.f, Pulse01(Now, 12.f))) : TextFaint,
 			bLiftNow });
 	}
 
 	const FTutorialLevel* Level = GM.IsTutorial() ? GM.GetTutorialLevel() : nullptr;
-	const FString Instruction = Level ? Level->Instruction : FString();
+	const FString Instruction = Level ? GM.ExpandKeys(Level->Instruction) : FString();
 
 	const float P = U(Pad);
 	const float CapSize = 16.f;
@@ -922,7 +937,7 @@ void ASpinHUD::DrawCallout(const ASpinGameMode& GM, float CenterX, float Y)
 	}
 	else if (GM.IsShowingNotice())
 	{
-		Title = GM.NoticeText;
+		Title = GM.ExpandKeys(GM.NoticeText);
 		TitleFontSize = 20.f;
 		Alpha = FMath::Clamp((GM.NoticeDuration - (Now - GM.NoticeTime)) / 0.4f, 0.f, 1.f);
 	}
@@ -1104,11 +1119,11 @@ void ASpinHUD::DrawMainMenu(const ASpinGameMode& GM)
 
 	const float BtnH = U(64.f);
 	const float Gap = U(12.f);
-	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("PLAY"), EMenuAction::Play, Gold, KeyLabelOf(GM, 0));
+	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("PLAY"), EMenuAction::Play, Gold, KeyHintOf(GM, 0));
 	Y += BtnH + Gap;
 	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("LEADERBOARD"), EMenuAction::OpenLeaderboard, Cyan);
 	Y += BtnH + Gap;
-	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("SETTINGS"), EMenuAction::OpenSettings, TextDim, KeyLabelOf(GM, 1));
+	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("SETTINGS"), EMenuAction::OpenSettings, TextDim, KeyHintOf(GM, 1));
 }
 
 void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
@@ -1180,7 +1195,7 @@ void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
 	const float PanelW = FMath::Min(U(640.f), ScreenW - U(Margin) * 2.f);
 	const float X = CX - PanelW * 0.5f;
 	const float RowH = U(76.f);
-	const int32 NumRows = 3;
+	const int32 NumRows = 4;
 	const float P = U(Pad);
 	DrawPanel(X, Y, PanelW, NumRows * RowH + P * 2.f, Cyan);
 
@@ -1208,6 +1223,8 @@ void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
 	DrawRow(0, TEXT("GRAPHICS QUALITY"), GM.GetQualityLabel(), EMenuAction::QualityPrev, EMenuAction::QualityNext);
 	DrawRow(1, TEXT("RESOLUTION"), GM.GetResolutionLabel(), EMenuAction::ResolutionPrev, EMenuAction::ResolutionNext);
 	DrawRow(2, TEXT("VOLUME"), FString::Printf(TEXT("%d%%"), GM.VolumePercent), EMenuAction::VolumeDown, EMenuAction::VolumeUp);
+	// Only two choices, so both arrows just flip it.
+	DrawRow(3, TEXT("CONTROLLER ICONS"), GM.GetControllerIconsLabel(), EMenuAction::ToggleControllerIcons, EMenuAction::ToggleControllerIcons);
 
 	const float BackW = U(220.f);
 	DrawMenuButton(CX - BackW * 0.5f, Y + NumRows * RowH + P * 2.f + U(32.f), BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
@@ -1291,7 +1308,7 @@ void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
 	Y += LineH(TinySize) + U(20.f);
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, KeyLabelOf(GM, 1));
+	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, KeyHintOf(GM, 1));
 }
 
 void ASpinHUD::DrawProfileSelect(const ASpinGameMode& GM)
@@ -1368,7 +1385,7 @@ void ASpinHUD::DrawProfileSelect(const ASpinGameMode& GM)
 	Y += RowH + U(28.f);
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, KeyLabelOf(GM, 1));
+	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, KeyHintOf(GM, 1));
 }
 
 void ASpinHUD::DrawNameEntry(const ASpinGameMode& GM)
@@ -1527,8 +1544,8 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	const bool bReady = GM.IsGameOverMenuReady();
 	const float BtnGap = U(16.f);
 	const float BtnW = (CardW - P * 2.f - BtnGap * 2.f) / 3.f;
-	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RETRY"), EMenuAction::RetryGame, Gold, KeyLabelOf(GM, 0), bReady);
-	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyLabelOf(GM, 1), bReady);
+	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RETRY"), EMenuAction::RetryGame, Gold, KeyHintOf(GM, 0), bReady);
+	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyHintOf(GM, 1), bReady);
 	DrawMenuButton(X + P + (BtnW + BtnGap) * 2.f, Y, BtnW, BtnH, TEXT("QUIT"), EMenuAction::QuitGame, Red, FString(), bReady);
 }
 
@@ -1561,8 +1578,8 @@ void ASpinHUD::DrawTutorialComplete(const ASpinGameMode& GM)
 
 	const float BtnGap = U(16.f);
 	const float BtnW = (CardW - P * 2.f - BtnGap) * 0.5f;
-	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("START ENDLESS"), EMenuAction::StartEndless, Gold, KeyLabelOf(GM, 0));
-	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyLabelOf(GM, 1));
+	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("START ENDLESS"), EMenuAction::StartEndless, Gold, KeyHintOf(GM, 0));
+	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyHintOf(GM, 1));
 }
 
 void ASpinHUD::DrawBriefing(const FString& Eyebrow, const FString& Title, const TArray<FSpinBriefLine>& Lines,
