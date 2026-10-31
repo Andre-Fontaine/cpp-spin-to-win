@@ -44,7 +44,6 @@ bool ASpinPlayerController::IsInMenuState() const
 	case ESpinState::ProfileSelect:
 	case ESpinState::NameEntry:
 	case ESpinState::GameOver:
-	case ESpinState::TutorialComplete:
 		return true;
 	default:
 		return false;
@@ -187,6 +186,10 @@ void ASpinPlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ASpinPlayerController::OnLiftReleased);
 	InputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &ASpinPlayerController::OnLiftPressed);
 	InputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Released, this, &ASpinPlayerController::OnLiftReleased);
+
+	// Repair: mashes a jammed hand free. Its own button, so over-mashing can't land on a zone.
+	InputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &ASpinPlayerController::OnRepair);
+	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Top, IE_Pressed, this, &ASpinPlayerController::OnRepair);
 }
 
 void ASpinPlayerController::OnButton0()
@@ -216,6 +219,14 @@ void ASpinPlayerController::OnLiftPressed()
 void ASpinPlayerController::OnLiftReleased()
 {
 	SetLift(false);
+}
+
+void ASpinPlayerController::OnRepair()
+{
+	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	{
+		GM->HandleRepairPressed();
+	}
 }
 
 void ASpinPlayerController::PressButton(int32 ButtonIndex)

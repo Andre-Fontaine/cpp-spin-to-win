@@ -134,7 +134,6 @@ void ASpinHUD::DrawHUD()
 	case ESpinState::NameEntry:        DrawNameEntry(*GM); break;
 	case ESpinState::Playing:          DrawRunHUD(*GM); break;
 	case ESpinState::GameOver:         DrawGameOver(*GM); break;
-	case ESpinState::TutorialComplete: DrawTutorialComplete(*GM); break;
 
 	case ESpinState::NewButtonIntro:
 		if (GM->Prompts.IsValidIndex(GM->NewButtonIndex))
@@ -143,13 +142,12 @@ void ASpinHUD::DrawHUD()
 			const int32 NumButtons = GM->NewButtonIndex + 1;
 			const FSpinPrompt& New = GM->Prompts[GM->NewButtonIndex];
 			TArray<FSpinBriefLine> Lines;
-			Lines.Add({ FString::Printf(TEXT("From now on each zone asks for one of %s buttons, at random. Match the zone's colour:"),
-				NumButtons == 2 ? TEXT("two") : TEXT("three")), TextMain });
+			Lines.Add({ TEXT("Match the zone's colour:"), TextMain });
 			for (int32 i = 0; i < NumButtons; ++i)
 			{
 				Lines.Add({ GM->GetButtonKey(i), GM->Prompts[i].Color });
 			}
-			Lines.Add({ TEXT("The hand has slowed down and the zones are wide again, so you can get used to it."), TextDim });
+			Lines.Add({ TEXT("Speed and zone size reset to help you adjust."), TextDim });
 
 			DrawBriefing(TEXT("NEW MECHANIC"), NumButtons == 2 ? TEXT("SECOND BUTTON") : TEXT("THIRD BUTTON"),
 				Lines, TEXT("Press"), GM->GetButtonKey(GM->NewButtonIndex), New.Color);
@@ -159,26 +157,39 @@ void ASpinHUD::DrawHUD()
 	case ESpinState::ObstacleIntro:
 		DrawBriefing(TEXT("NEW MECHANIC"), TEXT("OBSTACLES"),
 			{
-				{ TEXT("Posts will slide onto the dial. Don't let the hand touch them."), TextMain },
-				{ FString::Printf(TEXT("HOLD %s to raise the hand over them."), *GM->GetLiftKey(false)), Cyan },
-				{ TEXT("You lose points while the hand is up, and it drops by itself after one full turn."), TextDim },
-				{ FString::Printf(TEXT("You have %d lives. Hitting an obstacle costs one; hopping one earns one back."), GM->GetRunMaxLives()), FLinearColor(1.f, 0.65f, 0.65f) },
+				{ FString::Printf(TEXT("Hold %s to lift the hand over posts."), *GM->GetLiftKey(false)), Cyan },
+				{ TEXT("Lifting costs points - only lift when needed."), TextDim },
+				{ TEXT("Hit a post: -1 life. Clear one: +1 life."), FLinearColor(1.f, 0.65f, 0.65f) },
 			},
 			TEXT("Hold"), GM->GetLiftKey(), Cyan);
 		break;
 
 	case ESpinState::JamIntro:
 	{
-		const FString Key = KeyHintOf(*GM, 0);
+		const FString Key = GM->GetRepairKey();
 		DrawBriefing(TEXT("NEW MECHANIC"), TEXT("JAMS"),
 			{
-				{ TEXT("From now on the hand can overheat after a hit."), TextMain },
-				{ FString::Printf(TEXT("1.  WARNING  -  sparks and an orange flicker for %.0f seconds."), GM->JamSparkTime), Orange },
-				{ TEXT("2.  JAMMED  -  the hand spins out of control; zones and obstacles stop counting."), Red },
-				{ FString::Printf(TEXT("3.  REPAIR  -  mash %s %d times within %.0f seconds."), *Key, GM->JamPressesRequired, GM->JamTimeLimit), KeyColorOf(*GM, 0) },
-				{ TEXT("Too slow and the hand breaks - that costs a miss life."), TextDim },
+				{ TEXT("Sparks mean a jam is coming."), Orange },
+				{ FString::Printf(TEXT("When it jams, mash %s to fix it."), *Key), Gold },
+				{ TEXT("Too slow costs a miss."), TextDim },
 			},
-			TEXT("Press"), Key, KeyColorOf(*GM, 0));
+			TEXT("Press"), Key, Gold);
+		break;
+	}
+
+	case ESpinState::EndlessIntro:
+	{
+		TArray<FSpinBriefLine> Lines;
+		Lines.Add({ TEXT("Mistakes count now."), TextMain });
+		Lines.Add({ FString::Printf(TEXT("LIVES (left): %d. Hit a post -1, clear one +1."), GM->GetRunMaxLives()), Red });
+		Lines.Add({ FString::Printf(TEXT("MISSES (right): %d. Missed zone or wrong button -1."), GM->GetRunMaxMissLives()), Orange });
+		if (GM->MissRegenLevels > 0)
+		{
+			Lines.Add({ FString::Printf(TEXT("+1 miss back every %d levels."), GM->MissRegenLevels), TextDim });
+		}
+		Lines.Add({ TEXT("Run out of either and it's game over."), TextDim });
+		DrawBriefing(TEXT("TUTORIAL COMPLETE"), FString::Printf(TEXT("ENDLESS - LEVEL %d"), GM->GetLevel()),
+			Lines, TEXT("Press"), KeyHintOf(*GM, 0), KeyColorOf(*GM, 0));
 		break;
 	}
 
@@ -199,6 +210,9 @@ void ASpinHUD::DrawHUD()
 				break;
 			case ETutorialConfirm::SecondButton:
 				DrawBriefing(Eyebrow, Level->Title, Lines, TEXT("Press"), KeyHintOf(*GM, 1), KeyColorOf(*GM, 1));
+				break;
+			case ETutorialConfirm::Repair:
+				DrawBriefing(Eyebrow, Level->Title, Lines, TEXT("Press"), GM->GetRepairKey(), Gold);
 				break;
 			case ETutorialConfirm::Lift:
 				DrawBriefing(Eyebrow, Level->Title, Lines, TEXT("Hold"), GM->GetLiftKey(), Cyan);
@@ -531,13 +545,14 @@ void ASpinHUD::DrawRunHUD(const ASpinGameMode& GM)
 
 	DrawZoneLabel(GM);
 
-	// The three top modules: run (score) on the left, level in the middle, health on the right.
+	// The top modules: run (score) on the left, level in the middle. Health sits beside the dial,
+	// where the eyes already are.
 	if (!GM.IsTutorial())
 	{
 		DrawRunModule(GM, U(Margin), Top);
 	}
 	DrawLevelModule(GM, CX, Top);
-	DrawHealthModule(GM, ScreenW - U(Margin), Top);
+	DrawHealthColumns(GM);
 
 	if (GM.JamPhase == EJamPhase::Sparking)
 	{
@@ -725,54 +740,76 @@ void ASpinHUD::DrawLevelModule(const ASpinGameMode& GM, float CenterX, float Y)
 	}
 }
 
-void ASpinHUD::DrawHealthModule(const ASpinGameMode& GM, float RightX, float Y)
+void ASpinHUD::DrawHealthColumns(const ASpinGameMode& GM)
 {
+	// Endless always shows both, so they don't pop in when obstacles unlock. The tutorial has no
+	// misses, and only shows lives on the stages with obstacles.
 	const bool bMisses = !GM.IsTutorial();
-	const bool bLives = GM.ObstaclesEnabled();
+	const bool bLives = !GM.IsTutorial() || GM.ObstaclesEnabled();
 	if (!bMisses && !bLives)
 	{
 		return;
 	}
 
-	const float W = U(300.f);
-	const float X = RightX - W;
-	const float P = U(Pad);
-	const float RowH = LineH(SmallSize) + LineH(TinySize);
-	const float RowGap = U(10.f);
-	const int32 Rows = (bMisses ? 1 : 0) + (bLives ? 1 : 0);
-
-	DrawPanel(X, Y, W, P * 2.f + Rows * RowH + (Rows - 1) * RowGap, Red);
-
-	float RowY = Y + P;
-	auto DrawRow = [&](const TCHAR* Label, const TCHAR* Sub, int32 Count, int32 Max, const FLinearColor& Color, float LostTime, float GainedTime)
+	// Find the dial's left and right rim on screen (9 and 3 o'clock), so the columns hug it at any
+	// resolution or camera framing. Without a dial, fall back to either side of the screen centre.
+	float DialLeft = ScreenW * 0.5f - U(420.f);
+	float DialRight = ScreenW * 0.5f + U(420.f);
+	float DialCY = ScreenH * 0.5f;
+	if (const ASpinClock* Clock = GM.GetClock())
 	{
-		// The row flashes when it loses one.
+		const FVector A = Project(Clock->GetDialWorldLocation(270.f, 1.f));
+		const FVector B = Project(Clock->GetDialWorldLocation(90.f, 1.f));
+		DialLeft = FMath::Min(A.X, B.X);
+		DialRight = FMath::Max(A.X, B.X);
+		DialCY = (A.Y + B.Y) * 0.5f;
+	}
+
+	const float W = U(96.f);
+	const float P = U(Pad);
+	const float Pip = U(26.f);
+	const float Gap = U(8.f);
+	const float RimGap = U(48.f);
+
+	// See-through, so the columns sit quietly beside the dial. The -1 / +1 feedback stays opaque.
+	const float Alpha = 0.55f;
+
+	auto DrawColumn = [&](float X, const TCHAR* Label, const TCHAR* Sub, int32 Count, int32 Max, const FLinearColor& Color, float LostTime, float GainedTime)
+	{
+		const float PipsH = Max * Pip + (Max - 1) * Gap;
+		const float H = P * 2.f + LineH(SmallSize) + U(10.f) + PipsH + U(10.f) + LineH(TinySize);
+		const float Y = DialCY - H * 0.5f;
+		const float CX = X + W * 0.5f;
+
+		DrawPanel(X, Y, W, H, Color, Alpha);
+
+		// The column flashes when it loses one.
 		const float SinceLost = Now - LostTime;
 		if (SinceLost >= 0.f && SinceLost < 0.6f)
 		{
-			DrawRect(Fade(Color, 0.25f * (1.f - SinceLost / 0.6f)), X + U(4.f), RowY - U(4.f), W - U(8.f), RowH + U(8.f));
+			DrawRect(Fade(Color, 0.25f * (1.f - SinceLost / 0.6f)), X + U(4.f), Y + U(4.f), W - U(8.f), H - U(8.f));
 		}
 
-		DrawLabel(Label, X + P, RowY, SmallSize, Color, ESpinTextAlign::Left, true);
-		DrawLabel(Sub, X + P, RowY + LineH(SmallSize), TinySize, TextFaint);
+		DrawLabel(Label, CX, Y + P, SmallSize, Fade(Color, Alpha), ESpinTextAlign::Center, true);
 
-		const float Pip = U(18.f);
-		const float Gap = U(6.f);
-		const float PipX = X + W - P - (Max * Pip + (Max - 1) * Gap);
-		const float PipY = RowY + (RowH - Pip) * 0.5f;
+		// Pips stack bottom-up like a health bar, so a lost one goes from the top.
+		const float PipX = CX - Pip * 0.5f;
+		const float PipsBottom = Y + P + LineH(SmallSize) + U(10.f) + PipsH;
+		auto PipY = [&](int32 i) { return PipsBottom - Pip - i * (Pip + Gap); };
 		for (int32 i = 0; i < Max; ++i)
 		{
-			const float PX = PipX + i * (Pip + Gap);
 			if (i < Count)
 			{
-				DrawRect(Color, PX, PipY, Pip, Pip);
+				DrawRect(Fade(Color, Alpha), PipX, PipY(i), Pip, Pip);
 			}
 			else
 			{
-				DrawRect(TrackColor, PX, PipY, Pip, Pip);
-				DrawOutline(PX, PipY, Pip, Pip, Fade(Color, 0.35f), FMath::Max(1.f, U(1.f)));
+				DrawRect(Fade(TrackColor, Alpha), PipX, PipY(i), Pip, Pip);
+				DrawOutline(PipX, PipY(i), Pip, Pip, Fade(Color, 0.35f * Alpha), FMath::Max(1.f, U(1.f)));
 			}
 		}
+
+		DrawLabel(Sub, CX, PipsBottom + U(10.f), TinySize, Fade(TextFaint, Alpha), ESpinTextAlign::Center, true);
 
 		// "-1" / "+1" rises off the pip that just changed.
 		auto Float = [&](const TCHAR* Text, int32 PipIndex, float Since, const FLinearColor& FloatColor)
@@ -780,24 +817,24 @@ void ASpinHUD::DrawHealthModule(const ASpinGameMode& GM, float RightX, float Y)
 			if (Since >= 0.f && Since < 1.2f && PipIndex >= 0 && PipIndex < Max)
 			{
 				const float T = Since / 1.2f;
-				DrawLabel(Text, PipX + PipIndex * (Pip + Gap) + Pip * 0.5f, PipY + (Pip - LineH(SmallSize)) * 0.5f - U(18.f) * T,
+				DrawLabel(Text, CX, PipY(PipIndex) + (Pip - LineH(SmallSize)) * 0.5f - U(18.f) * T,
 					SmallSize, Fade(FloatColor, 1.f - T * T), ESpinTextAlign::Center, true);
 			}
 		};
 		Float(TEXT("-1"), Count, SinceLost, Color);
 		Float(TEXT("+1"), Count - 1, Now - GainedTime, Green);
-
-		RowY += RowH + RowGap;
 	};
 
-	if (bMisses)
-	{
-		DrawRow(TEXT("MISSES"), TEXT("no refills"), GM.MissLives, GM.GetRunMaxMissLives(), Orange, GM.MissLifeLostTime, -1000.f);
-	}
+	// Left of the dial: obstacle lives. Right of it: miss lives.
 	if (bLives)
 	{
-		DrawRow(TEXT("LIVES"), GM.IsTutorial() ? TEXT("practice - can't run out") : TEXT("+1 per obstacle hopped"),
+		DrawColumn(DialLeft - RimGap - W, TEXT("LIVES"), GM.IsTutorial() ? TEXT("PRACTICE") : TEXT("+1 PER HOP"),
 			GM.Lives, GM.GetRunMaxLives(), Red, GM.LifeLostTime, GM.LifeGainedTime);
+	}
+	if (bMisses)
+	{
+		const FString MissSub = GM.MissRegenLevels > 0 ? FString::Printf(TEXT("+1 PER %d LV"), GM.MissRegenLevels) : FString(TEXT("NO REFILLS"));
+		DrawColumn(DialRight + RimGap, TEXT("MISSES"), *MissSub, GM.MissLives, GM.GetRunMaxMissLives(), Orange, GM.MissLifeLostTime, GM.MissLifeGainedTime);
 	}
 }
 
@@ -809,89 +846,28 @@ void ASpinHUD::DrawControlStrip(const ASpinGameMode& GM, float CenterX, float Bo
 		return;
 	}
 
-	struct FItem
-	{
-		FString Key;
-		FString Caption;
-		FLinearColor Color;
-		FLinearColor CaptionColor;
-		bool bLit;
-	};
-	TArray<FItem> Items;
-
-	// The buttons in play, in their zone colours. The one this zone wants is lit.
-	for (int32 i = 0; i < GM.GetNumActiveButtons(); ++i)
-	{
-		if (GM.Prompts.IsValidIndex(i))
-		{
-			const bool bThisZone = i == GM.ActivePromptIndex && !GM.bInvincible;
-			Items.Add({ GM.GetButtonKey(i), bThisZone ? TEXT("THIS ZONE") : TEXT(""), GM.Prompts[i].Color, GM.Prompts[i].Color, bThisZone });
-		}
-	}
-
-	// The lift, once obstacles are in play: lit and pulsing while there's something to hop.
-	if (GM.ObstaclesEnabled())
-	{
-		const ASpinClock* Clock = GM.GetClock();
-		const bool bLiftNow = Clock && Clock->IsLiftAvailable() && !GM.bInvincible;
-		const TCHAR* IdleCaption = (Clock && Clock->IsLiftActive() && !GM.IsTutorial())
-			? TEXT("LIFTED  -  losing points")
-			: TEXT("LIFT  -  costs points while up");
-		Items.Add({ FString::Printf(TEXT("HOLD  %s"), *GM.GetLiftKey()),
-			bLiftNow ? TEXT("LIFT NOW!") : IdleCaption,
-			bLiftNow ? Cyan : Fade(Cyan, 0.6f),
-			bLiftNow ? Fade(Cyan, FMath::Lerp(0.6f, 1.f, Pulse01(Now, 12.f))) : TextFaint,
-			bLiftNow });
-	}
-
+	// No key list - the key cap on the zone already says what to press. Only the tutorial's
+	// one-line reminder for the stage is left down here.
 	const FTutorialLevel* Level = GM.IsTutorial() ? GM.GetTutorialLevel() : nullptr;
 	const FString Instruction = Level ? GM.ExpandKeys(Level->Instruction) : FString();
+	if (Instruction.IsEmpty())
+	{
+		return;
+	}
 
 	const float P = U(Pad);
-	const float CapSize = 16.f;
-	const float ItemGap = U(28.f);
-	const float CapH = KeyCapHeight(CapSize);
-
-	TArray<float> ItemWidths;
-	float ContentW = 0.f;
-	for (const FItem& Item : Items)
-	{
-		const float ItemW = FMath::Max(KeyCapWidth(Item.Key, CapSize), MeasureText(Item.Caption, TinySize, true).X);
-		ItemWidths.Add(ItemW);
-		ContentW += ItemW;
-	}
-	ContentW += ItemGap * FMath::Max(0, Items.Num() - 1);
-
-	const float InstructionH = Instruction.IsEmpty() ? 0.f : LineH(SmallSize) + U(10.f);
-	const float PanelW = FMath::Max(ContentW, MeasureText(Instruction, SmallSize).X) + P * 2.f;
-	const float PanelH = P + InstructionH + CapH + U(4.f) + LineH(TinySize) + P;
+	const float PanelW = MeasureText(Instruction, SmallSize).X + P * 2.f;
+	const float PanelH = P + LineH(SmallSize) + P;
 	const float X = CenterX - PanelW * 0.5f;
 	const float Y = BottomY - PanelH;
 
 	DrawPanel(X, Y, PanelW, PanelH, KeyColorOf(GM, GM.ActivePromptIndex));
-
-	float RowY = Y + P;
-	if (!Instruction.IsEmpty())
-	{
-		DrawLabel(Instruction, CenterX, RowY, SmallSize, TextMain, ESpinTextAlign::Center);
-		RowY += InstructionH;
-	}
-
-	float ItemX = CenterX - ContentW * 0.5f;
-	for (int32 i = 0; i < Items.Num(); ++i)
-	{
-		const FItem& Item = Items[i];
-		const float ItemW = ItemWidths[i];
-		const float CapW = KeyCapWidth(Item.Key, CapSize);
-		DrawKeyCap(Item.Key, ItemX + (ItemW - CapW) * 0.5f, RowY, CapSize, Item.Color, Item.bLit);
-		DrawLabel(Item.Caption, ItemX + ItemW * 0.5f, RowY + CapH + U(4.f), TinySize, Item.CaptionColor, ESpinTextAlign::Center, true);
-		ItemX += ItemW + ItemGap;
-	}
+	DrawLabel(Instruction, CenterX, Y + P, SmallSize, TextMain, ESpinTextAlign::Center);
 }
 
 void ASpinHUD::DrawRepairPanel(const ASpinGameMode& GM, float CenterX, float BottomY)
 {
-	const FString Key = KeyHintOf(GM, 0);
+	const FString Key = GM.GetRepairKey();
 	const float P = U(20.f);
 	const float W = FMath::Min(U(600.f), ScreenW - U(Margin) * 2.f);
 	const float X = CenterX - W * 0.5f;
@@ -941,7 +917,7 @@ void ASpinHUD::DrawCallout(const ASpinGameMode& GM, float CenterX, float Y)
 	TArray<FSpinBriefLine> Subs;
 
 	// Highest priority first - only one message ever occupies the slot.
-	const FString RepairKey = KeyHintOf(GM, 0);
+	const FString RepairKey = GM.GetRepairKey();
 	if (GM.JamPhase == EJamPhase::Sparking)
 	{
 		Title = TEXT("OVERHEATING!");
@@ -1598,7 +1574,9 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	}
 	const float RunKindH = RunKind.IsEmpty() ? 0.f : LineH(SmallSize) + U(4.f);
 
-	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + U(26.f) + TileH + U(28.f) + BtnH + P;
+	const float StatPad = U(12.f);
+	const float StatH = StatPad * 2.f + LineH(TinySize) * 2.f + LineH(HeadingSize);
+	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + U(26.f) + TileH + U(16.f) + StatH + U(28.f) + BtnH + P;
 	const float X = CX - CardW * 0.5f;
 	float Y = (ScreenH - CardH) * 0.5f;
 	DrawPanel(X, Y, CardW, CardH, Red);
@@ -1668,7 +1646,31 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	};
 	DrawTile(X + P, TEXT("LEVEL"), FString::FromInt(Level), LevelStatus, bNewBestLevel);
 	DrawTile(X + P + TileW + TileGap, TEXT("SCORE"), FormatPoints(GM.Points), PointsStatus, bNewBestPoints);
-	Y += TileH + U(28.f);
+	Y += TileH + U(16.f);
+
+	// The run breakdown: how the score was built and where it leaked.
+	const FString ComboDetail = GM.PeakMultiplier > 1 ? FString::Printf(TEXT("PERFECTs in a row  -  peak x%d"), GM.PeakMultiplier) : FString(TEXT("PERFECTs in a row"));
+	const FString ObstacleDetail = FString::Printf(TEXT("%d cleared"), GM.ObstaclesCleared);
+
+	const float StatGap = U(12.f);
+	const float StatW = (CardW - P * 2.f - StatGap * 2.f) / 3.f;
+	auto DrawStat = [&](int32 Slot, const TCHAR* Label, const FString& Value, const FString& Detail, const FLinearColor& ValueColor)
+	{
+		const float StatX = X + P + (StatW + StatGap) * Slot;
+		const float StatCX = StatX + StatW * 0.5f;
+		DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.03f), StatX, Y, StatW, StatH);
+		DrawOutline(StatX, Y, StatW, StatH, PanelEdge, FMath::Max(1.f, U(1.f)));
+		float StatY = Y + StatPad;
+		DrawLabel(Label, StatCX, StatY, TinySize, TextDim, ESpinTextAlign::Center, true);
+		StatY += LineH(TinySize);
+		DrawLabel(Value, StatCX, StatY, HeadingSize, ValueColor, ESpinTextAlign::Center, true);
+		StatY += LineH(HeadingSize);
+		DrawLabel(Detail, StatCX, StatY, TinySize, TextDim, ESpinTextAlign::Center);
+	};
+	DrawStat(0, TEXT("LONGEST COMBO"), FString::FromInt(GM.LongestPerfectStreak), ComboDetail, GM.PeakMultiplier > 1 ? Gold : TextMain);
+	DrawStat(1, TEXT("LOST TO LIFTING"), GM.PointsLostToLift > 0 ? TEXT("-") + FormatPoints(GM.PointsLostToLift) : FString(TEXT("0")), TEXT("points"), GM.PointsLostToLift > 0 ? Red : TextMain);
+	DrawStat(2, TEXT("OBSTACLES HIT"), FString::FromInt(GM.ObstaclesHit), ObstacleDetail, GM.ObstaclesHit > 0 ? Red : TextMain);
+	Y += StatH + U(28.f);
 
 	// Shown straight away but only clickable after the short delay, so a press meant for the hand
 	// can't land on one by accident.
@@ -1678,39 +1680,6 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RETRY"), EMenuAction::RetryGame, Gold, KeyHintOf(GM, 0), bReady);
 	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyHintOf(GM, 1), bReady);
 	DrawMenuButton(X + P + (BtnW + BtnGap) * 2.f, Y, BtnW, BtnH, TEXT("QUIT"), EMenuAction::QuitGame, Red, FString(), bReady);
-}
-
-void ASpinHUD::DrawTutorialComplete(const ASpinGameMode& GM)
-{
-	DrawBackdrop(0.8f);
-
-	const float CX = ScreenW * 0.5f;
-	const float CardW = FMath::Min(U(700.f), ScreenW - U(Margin) * 2.f);
-	const float P = U(32.f);
-	const float BtnH = U(60.f);
-
-	const TArray<FString> Lines = WrapText(TEXT("From here on mistakes cost lives, and a jam you can't fix ends the run."), BodySize, false, CardW - P * 2.f);
-	const float CardH = P + LineH(TinySize) + U(6.f) + LineH(TitleSize) + U(16.f) + Lines.Num() * LineH(BodySize) + U(28.f) + BtnH + P;
-	const float X = CX - CardW * 0.5f;
-	float Y = (ScreenH - CardH) * 0.5f;
-	DrawPanel(X, Y, CardW, CardH, Green);
-	Y += P;
-
-	DrawLabel(TEXT("TUTORIAL"), CX, Y, TinySize, Green, ESpinTextAlign::Center, true);
-	Y += LineH(TinySize) + U(6.f);
-	DrawLabel(TEXT("ALL STAGES CLEARED!"), CX, Y, TitleSize, Gold, ESpinTextAlign::Center, true);
-	Y += LineH(TitleSize) + U(16.f);
-	for (const FString& Line : Lines)
-	{
-		DrawLabel(Line, CX, Y, BodySize, TextMain, ESpinTextAlign::Center);
-		Y += LineH(BodySize);
-	}
-	Y += U(28.f);
-
-	const float BtnGap = U(16.f);
-	const float BtnW = (CardW - P * 2.f - BtnGap) * 0.5f;
-	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("START ENDLESS"), EMenuAction::StartEndless, Gold, KeyHintOf(GM, 0));
-	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyHintOf(GM, 1));
 }
 
 void ASpinHUD::DrawBriefing(const FString& Eyebrow, const FString& Title, const TArray<FSpinBriefLine>& Lines,

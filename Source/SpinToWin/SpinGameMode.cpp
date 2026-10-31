@@ -59,10 +59,9 @@ void ASpinGameMode::BuildTutorialLevels()
 	{
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 1 - THE BASICS");
-		L.IntroLines.Add(TEXT("A hand sweeps around the dial."));
-		L.IntroLines.Add(TEXT("Press {0} when it is inside the green zone."));
-		L.IntroLines.Add(TEXT("Miss? No problem. The hand keeps going, just try again."));
-		L.Instruction = TEXT("Press {0} when the hand is inside the green zone");
+		L.IntroLines.Add(TEXT("Press {0} when the hand is in the green zone."));
+		L.IntroLines.Add(TEXT("Missed? It comes back around."));
+		L.Instruction = TEXT("Press {0} in the green zone");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 70.f;
@@ -74,9 +73,9 @@ void ASpinGameMode::BuildTutorialLevels()
 	// Level 2: a little faster, slightly smaller zones.
 	{
 		FTutorialLevel L;
-		L.Title = TEXT("LEVEL 2 - A LITTLE FASTER");
-		L.IntroLines.Add(TEXT("Same thing, a little quicker, with smaller zones."));
-		L.Instruction = TEXT("Press {0} when the hand is inside the green zone");
+		L.Title = TEXT("LEVEL 2 - FASTER");
+		L.IntroLines.Add(TEXT("Faster hand, smaller zones."));
+		L.Instruction = TEXT("Press {0} in the green zone");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 85.f;
@@ -88,12 +87,10 @@ void ASpinGameMode::BuildTutorialLevels()
 	// Level 3: the second button. Same speed as level 2, zones as big as level 1.
 	{
 		FTutorialLevel L;
-		L.Title = TEXT("LEVEL 3 - A SECOND BUTTON");
-		L.IntroLines.Add(TEXT("Zones now come in two colors."));
-		L.IntroLines.Add(TEXT("GREEN zone: press {0}"));
-		L.IntroLines.Add(TEXT("BLUE zone: press {1}"));
-		L.IntroLines.Add(TEXT("The zones are big again while you get used to it."));
-		L.Instruction = TEXT("Green zone: {0}     Blue zone: {1}");
+		L.Title = TEXT("LEVEL 3 - SECOND BUTTON");
+		L.IntroLines.Add(TEXT("Green zone: {0}"));
+		L.IntroLines.Add(TEXT("Blue zone: {1}"));
+		L.Instruction = TEXT("Green {0}     Blue {1}");
 		L.Confirm = ETutorialConfirm::SecondButton;
 		L.Hits = 10;
 		L.Speed = 85.f;
@@ -107,8 +104,8 @@ void ASpinGameMode::BuildTutorialLevels()
 	{
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 4 - SPEEDING UP");
-		L.IntroLines.Add(TEXT("Both buttons again, a little faster, with smaller zones."));
-		L.Instruction = TEXT("Green zone: {0}     Blue zone: {1}");
+		L.IntroLines.Add(TEXT("Both buttons, faster, smaller zones."));
+		L.Instruction = TEXT("Green {0}     Blue {1}");
 		L.Confirm = ETutorialConfirm::FirstButton;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -121,11 +118,10 @@ void ASpinGameMode::BuildTutorialLevels()
 	{
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 5 - OBSTACLES");
-		L.IntroLines.Add(TEXT("Posts will slide onto the dial. Don't let the hand touch them."));
-		L.IntroLines.Add(TEXT("HOLD {LIFT} to raise the hand over a post. It drops by itself after one full turn."));
-		L.IntroLines.Add(TEXT("In a real run you lose points for as long as the hand is up, so only lift when you need to."));
-		L.IntroLines.Add(FString::Printf(TEXT("You get %d lives in a real run, and hopping a post earns one back."), MaxLives));
-		L.Instruction = TEXT("Hold {LIFT} to raise the hand over posts");
+		L.IntroLines.Add(TEXT("Hold {LIFT} to lift the hand over posts."));
+		L.IntroLines.Add(TEXT("Lifting costs points - only lift when needed."));
+		L.IntroLines.Add(TEXT("Hit a post: -1 life. Clear one: +1 life."));
+		L.Instruction = TEXT("Hold {LIFT} to lift over posts");
 		L.Confirm = ETutorialConfirm::Lift;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -139,10 +135,9 @@ void ASpinGameMode::BuildTutorialLevels()
 	// Level 6: the second button comes back, obstacles stay.
 	{
 		FTutorialLevel L;
-		L.Title = TEXT("LEVEL 6 - EVERYTHING TOGETHER");
-		L.IntroLines.Add(TEXT("The second button is back."));
-		L.IntroLines.Add(TEXT("Use both buttons and hop the posts at the same time."));
-		L.Instruction = TEXT("Green: {0}   Blue: {1}   Raise: {LIFT}");
+		L.Title = TEXT("LEVEL 6 - ALL TOGETHER");
+		L.IntroLines.Add(TEXT("Both buttons, plus posts."));
+		L.Instruction = TEXT("Green {0}   Blue {1}   Lift {LIFT}");
 		L.Confirm = ETutorialConfirm::SecondButton;
 		L.Hits = 10;
 		L.Speed = 100.f;
@@ -158,12 +153,12 @@ void ASpinGameMode::BuildTutorialLevels()
 	{
 		FTutorialLevel L;
 		L.Title = TEXT("LEVEL 7 - JAMS");
-		L.IntroLines.Add(TEXT("Sparks at the center mean the hand is about to jam."));
-		L.IntroLines.Add(TEXT("A jammed hand keeps spinning and ignores everything in its way."));
-		L.IntroLines.Add(TEXT("Press {0} again and again to fix it before the time bar runs out."));
-		L.IntroLines.Add(TEXT("In a real run you get 3 seconds, or the hand breaks and it is game over."));
-		L.Instruction = TEXT("If the hand jams, press {0} again and again");
-		L.Confirm = ETutorialConfirm::FirstButton;
+		L.IntroLines.Add(TEXT("Sparks mean a jam is coming."));
+		L.IntroLines.Add(TEXT("When it jams, mash {REPAIR} to fix it."));
+		L.IntroLines.Add(TEXT("Too slow and the hand breaks."));
+		L.IntroLines.Add(TEXT("Clear this stage and Endless begins."));
+		L.Instruction = TEXT("Jammed? Mash {REPAIR}");
+		L.Confirm = ETutorialConfirm::Repair;
 		L.Hits = 10;
 		L.Speed = 100.f;
 		L.ZoneHalfWidth = 38.f;
@@ -260,7 +255,9 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		LiftPointsDebt += LiftPointsPerSecond * Dt;
 		const int32 Whole = FMath::FloorToInt(LiftPointsDebt);
 		LiftPointsDebt -= Whole;
+		const int32 OldPoints = Points;
 		Points = FMath::Max(0, Points - Whole);
+		PointsLostToLift += OldPoints - Points;
 	}
 
 	// Invincibility window after losing a life: the hand keeps moving, but
@@ -303,7 +300,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 				bTutorialObstacleHit = true;
 				bZoneTainted = true;
 				Shake(LifeLostShake);
-				ShowNotice(TEXT("You touched a post! Hold {LIFT} to raise the hand over it. Try the lap again."));
+				ShowNotice(TEXT("Hit a post! Hold {LIFT} to lift over it"));
 			}
 		}
 		else
@@ -408,13 +405,9 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 			break;
 		}
 
-		// A jammed hand only listens to the first button, which mashes it free.
+		// A jammed hand ignores the hit buttons - only the repair button works (HandleRepairPressed).
 		if (JamPhase == EJamPhase::Jammed)
 		{
-			if (ButtonIndex == 0)
-			{
-				RegisterJamPress();
-			}
 			break;
 		}
 
@@ -453,7 +446,10 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 
 	case ESpinState::JamIntro:
-		// Confirmed with the first button - the same one that repairs a jam.
+		// Waits for the repair button instead, see HandleRepairPressed.
+		break;
+
+	case ESpinState::EndlessIntro:
 		if (ButtonIndex == 0)
 		{
 			ResumeAfterIntro();
@@ -472,18 +468,6 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 	}
 
-	case ESpinState::TutorialComplete:
-		// First button: on to Endless. Second button: back to the title screen.
-		if (ButtonIndex == 0)
-		{
-			StartGame();
-		}
-		else if (ButtonIndex == 1)
-		{
-			ReturnToTitle();
-		}
-		break;
-
 	case ESpinState::GameOver:
 		// Mirrors the game-over menu: first button retries (the same kind of run), second goes back
 		// to the main menu. Quitting is mouse-only so it can't happen by accident.
@@ -498,6 +482,35 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 				ReturnToTitle();
 			}
 		}
+		break;
+	}
+}
+
+void ASpinGameMode::HandleRepairPressed()
+{
+	switch (State)
+	{
+	case ESpinState::Playing:
+		// Only does anything while the hand is jammed; any other time it's harmlessly ignored.
+		if (!bInvincible && JamPhase == EJamPhase::Jammed)
+		{
+			RegisterJamPress();
+		}
+		break;
+
+	case ESpinState::JamIntro:
+		// Confirming the jam screen with the button that repairs a jam.
+		ResumeAfterIntro();
+		break;
+
+	case ESpinState::TutorialIntro:
+		if (const FTutorialLevel* Level = GetTutorialLevel(); Level && Level->Confirm == ETutorialConfirm::Repair)
+		{
+			BeginTutorialPlay();
+		}
+		break;
+
+	default:
 		break;
 	}
 }
@@ -545,6 +558,11 @@ void ASpinGameMode::SetLiftHeld(bool bHeld)
 
 void ASpinGameMode::OnObstacleCleared()
 {
+	if (State == ESpinState::Playing)
+	{
+		++ObstaclesCleared;
+	}
+
 	// The hand got over an obstacle: earn a life back.
 	if (State == ESpinState::Playing && Lives < GetRunMaxLives())
 	{
@@ -713,6 +731,8 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 	{
 		++PerfectStreak;
 		ComboMultiplier = FMath::Min(MaxMultiplier, 1 + PerfectStreak / FMath::Max(1, PerfectsPerMultiplier));
+		LongestPerfectStreak = FMath::Max(LongestPerfectStreak, PerfectStreak);
+		PeakMultiplier = FMath::Max(PeakMultiplier, ComboMultiplier);
 	}
 	else if (Grade == ESpinHitGrade::Ok)
 	{
@@ -897,7 +917,12 @@ float ASpinGameMode::GetRunMinZoneHalfWidth() const
 
 int32 ASpinGameMode::GetRunJamStartLevel() const
 {
-	return HasModifier(ESpinModifier::EarlyJams) ? 1 : JamStartLevel;
+	if (HasModifier(ESpinModifier::EarlyJams))
+	{
+		return 1;
+	}
+	// The tutorial already taught jams, so a run carried on from it has them straight away.
+	return bRunFromTutorial ? FMath::Min(JamStartLevel, TutorialHandoffLevel) : JamStartLevel;
 }
 
 float ASpinGameMode::GetRunJamChance() const
@@ -1033,6 +1058,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	// The daily challenge is the same run for everyone today: a seed and a modifier picked from
 	// the date. A normal run plays whatever was picked on the modifier screen, on a fresh seed.
 	bDailyRun = bDaily;
+	bRunFromTutorial = false;
 	RunDayKey = GetTodayKey();
 	RunModifiers = bDaily ? GetDailyModifiers() : SelectedModifiers;
 	RunPointsMultiplier = GetModifiersMultiplier(RunModifiers);
@@ -1047,6 +1073,11 @@ void ASpinGameMode::StartGame(bool bDaily)
 	LastHitPoints = 0;
 	ComboLostTime = -1000.f;
 	PassedBestPointsTime = -1000.f;
+	LongestPerfectStreak = 0;
+	PeakMultiplier = 1;
+	PointsLostToLift = 0;
+	ObstaclesHit = 0;
+	ObstaclesCleared = 0;
 
 	// What this run is chasing (the player's own bests), and whether they've earned a quicker opening.
 	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
@@ -1079,6 +1110,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	bOutOfLives = false;
 	MissLives = GetRunMaxMissLives();
 	MissLifeLostTime = -1000.f;
+	MissLifeGainedTime = -1000.f;
 	bOutOfMissLives = false;
 	// A few seconds of invincibility (with the big countdown) to get oriented before anything can
 	// go wrong, same as resuming after a mistake.
@@ -1093,6 +1125,58 @@ void ASpinGameMode::StartGame(bool bDaily)
 	LiftPointsDebt = 0.f;
 	ResetJam();
 	PlaceNextZone();
+}
+
+void ASpinGameMode::ContinueFromTutorial()
+{
+	// The hand doesn't stop: keep where it is, and reverse it like any other hit.
+	const float KeptAngle = HandAngle;
+	const float KeptDirection = Direction;
+
+	StartGame();
+
+	// A plain run - no modifiers or fast start, whatever is picked on the modifier screen.
+	bRunFromTutorial = true;
+	RunModifiers = 0;
+	RunPointsMultiplier = 1.f;
+	bFastStart = false;
+	Lives = GetRunMaxLives();
+	MissLives = GetRunMaxMissLives();
+
+	HandAngle = KeptAngle;
+	Direction = -KeptDirection;
+
+	// Skip ahead to the handoff level with the same ramp the skipped hits would have applied
+	// (including the reset when a button unlocks), so it plays exactly like getting there normally.
+	Hits = 0;
+	CurrentSpeed = GetRunStartSpeed();
+	ZoneHalfWidth = GetRunStartZoneHalfWidth();
+	while (GetLevel() < TutorialHandoffLevel)
+	{
+		const int32 OldLevel = GetLevel();
+		++Hits;
+		CurrentSpeed = FMath::Min(CurrentSpeed * SpeedMultiplier, MaxSpeed);
+		ZoneHalfWidth = FMath::Max(GetRunMinZoneHalfWidth(), ZoneHalfWidth - ZoneShrinkPerHit);
+		for (int32 i = 1; i < Prompts.Num(); ++i)
+		{
+			if (OldLevel < GetButtonUnlockLevel(i) && GetLevel() >= GetButtonUnlockLevel(i))
+			{
+				CurrentSpeed = GetRunStartSpeed();
+				ZoneHalfWidth = GetRunStartZoneHalfWidth();
+			}
+		}
+	}
+
+	// No countdown and no obstacle on the first zone. Play pauses on a screen explaining what's
+	// different now (lives and misses), then picks up right where the hand is.
+	bInvincible = false;
+	InvincibleTimeRemaining = 0.f;
+	bHandWasInZone = false;
+	PromptStreak = 1;
+	PickNextPrompt();
+	PlaceNextZone(false);
+	NoticeTime = -1000.f;
+	State = ESpinState::EndlessIntro;
 }
 
 void ASpinGameMode::OnHit()
@@ -1142,6 +1226,16 @@ void ASpinGameMode::OnHit()
 	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
 	{
 		LevelUpTime = GetWorld()->GetTimeSeconds();
+	}
+
+	// Every MissRegenLevels levels, one lost miss life comes back.
+	if (MissRegenLevels > 0 && NewLevel / MissRegenLevels > OldLevel / MissRegenLevels && MissLives < GetRunMaxMissLives())
+	{
+		++MissLives;
+		if (GetWorld())
+		{
+			MissLifeGainedTime = GetWorld()->GetTimeSeconds();
+		}
 	}
 
 	Shake(HitShake);
@@ -1218,7 +1312,7 @@ bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& Ou
 	if (Level == GetRunJamStartLevel() && Prompts.IsValidIndex(0))
 	{
 		Titles.Add(TEXT("JAMS"));
-		Hints.Add(TEXT("Sparks mean a jam is coming - mash {0} to repair it"));
+		Hints.Add(TEXT("Sparks mean a jam is coming - mash {REPAIR} to repair it"));
 	}
 
 	OutTitle = FString::Join(Titles, TEXT("  +  "));
@@ -1237,6 +1331,11 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 	Shake(LifeLostShake);
 	bHandWasInZone = false;
 	BreakCombo();
+
+	if (Mistake == ESpinMistake::HitObstacle)
+	{
+		++ObstaclesHit;
+	}
 
 	// Obstacle hits spend the regenerating "Lives" pool; everything else spends the
 	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise play
@@ -1401,19 +1500,19 @@ void ASpinGameMode::HandleTutorialPress(int32 ButtonIndex)
 {
 	if (!IsHandInZone())
 	{
-		ShowNotice(TEXT("Too early! Wait until the hand is inside the zone."));
+		ShowNotice(TEXT("Too early!"));
 		return;
 	}
 
 	if (ButtonIndex != ActivePromptIndex)
 	{
-		ShowNotice(FString::Printf(TEXT("Wrong button! This zone needs {%d}."), ActivePromptIndex));
+		ShowNotice(FString::Printf(TEXT("Wrong button - this zone needs {%d}"), ActivePromptIndex));
 		return;
 	}
 
 	if (bZoneTainted)
 	{
-		ShowNotice(TEXT("You touched a post on the way. Go around again and raise the hand over it."));
+		ShowNotice(TEXT("You hit a post - go around again"));
 		return;
 	}
 
@@ -1451,7 +1550,7 @@ void ASpinGameMode::OnTutorialHit()
 				Clock->RetireObstacles();
 				Clock->SetLiftHeld(false, false);
 			}
-			State = ESpinState::TutorialComplete;
+			ContinueFromTutorial();
 		}
 		return;
 	}
@@ -1473,7 +1572,7 @@ void ASpinGameMode::OnTutorialHit()
 void ASpinGameMode::OnTutorialMiss()
 {
 	// The hand keeps moving and the zone stays exactly where it is. It will come around again.
-	ShowNotice(TEXT("Missed it! The hand keeps going. Try again."));
+	ShowNotice(TEXT("Missed - try again"));
 	bZoneTainted = false;
 	RespawnObstacleForCurrentZone();
 }
@@ -1657,7 +1756,7 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::StartEndless:
-		if (State == ESpinState::ModifierSelect || State == ESpinState::TutorialComplete)
+		if (State == ESpinState::ModifierSelect)
 		{
 			StartGame();
 		}
@@ -1737,7 +1836,7 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::ReturnToMainMenu:
-		if (IsGameOverMenuReady() || State == ESpinState::TutorialComplete)
+		if (IsGameOverMenuReady())
 		{
 			ReturnToTitle();
 		}
@@ -1873,9 +1972,20 @@ FString ASpinGameMode::GetLiftKey(bool bShort) const
 	}
 }
 
+FString ASpinGameMode::GetRepairKey() const
+{
+	switch (InputStyle)
+	{
+	case ESpinInputStyle::Xbox:        return TEXT("Y");
+	case ESpinInputStyle::PlayStation: return TEXT("/\\");
+	default:                           return TEXT("SPACE");
+	}
+}
+
 FString ASpinGameMode::ExpandKeys(const FString& Text) const
 {
 	FString Result = Text.Replace(TEXT("{LIFT}"), *GetLiftKey(false));
+	Result.ReplaceInline(TEXT("{REPAIR}"), *GetRepairKey());
 	for (int32 i = 0; i < Prompts.Num(); ++i)
 	{
 		Result.ReplaceInline(*FString::Printf(TEXT("{%d}"), i), *GetButtonKey(i));
@@ -1899,7 +2009,7 @@ void ASpinGameMode::StartJamSparks()
 	}
 	if (IsTutorial())
 	{
-		ShowNotice(TEXT("Sparks! The hand is about to jam."));
+		ShowNotice(TEXT("Sparks! A jam is coming"));
 	}
 }
 
@@ -1930,7 +2040,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 			}
 			if (IsTutorial())
 			{
-				ShowNotice(TEXT("Jammed! Press {0} again and again to fix it."));
+				ShowNotice(TEXT("Jammed! Mash {REPAIR}"));
 			}
 		}
 		return;
@@ -1944,7 +2054,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 			// No penalty in the tutorial: start the attempt over.
 			JamTimer = 0.f;
 			JamPresses = 0;
-			ShowNotice(TEXT("Too slow! In a real run the hand would break. Try again."));
+			ShowNotice(TEXT("Too slow - try again"));
 		}
 		else
 		{
@@ -1983,7 +2093,7 @@ void ASpinGameMode::FixJam()
 
 	if (IsTutorial())
 	{
-		ShowNotice(TEXT("Fixed! Back to it."));
+		ShowNotice(TEXT("Fixed!"));
 	}
 }
 

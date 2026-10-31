@@ -32,12 +32,13 @@ enum class ESpinState : uint8
 	NewButtonIntro,
 	/** Endless: paused on the "obstacles" screen until the player holds the lift button. */
 	ObstacleIntro,
-	/** Endless: paused on the "jams" screen (first time jams can happen) until the player presses the first button. */
+	/** Endless: paused on the "jams" screen (first time jams can happen) until the player presses the repair button. */
 	JamIntro,
 	/** Tutorial: paused on a level's explanation screen until the player presses its confirm button. */
 	TutorialIntro,
-	/** Tutorial finished. */
-	TutorialComplete
+	/** The tutorial just ended and the run carries on as Endless: paused on a screen explaining lives
+	 *  and misses until the player presses the first button. */
+	EndlessIntro
 };
 
 /** What kind of mistake last cost a life, so the right message and feedback can be shown. */
@@ -150,7 +151,7 @@ enum class EJamPhase : uint8
 	None,
 	/** Sparks at the centre, the hand still works normally. */
 	Sparking,
-	/** The hand is broken: it keeps spinning, ignores everything, and must be fixed by mashing a button. */
+	/** The hand is broken: it keeps spinning, ignores everything, and must be fixed by mashing the repair button. */
 	Jammed
 };
 
@@ -160,7 +161,8 @@ enum class ETutorialConfirm : uint8
 {
 	FirstButton,
 	SecondButton,
-	Lift
+	Lift,
+	Repair
 };
 
 /** Which device's button names the on-screen prompts show. */
@@ -272,6 +274,10 @@ public:
 	/** Called by the player controller. ButtonIndex 0 = first button, 1 = second, 2 = third. */
 	void HandleButtonPressed(int32 ButtonIndex);
 
+	/** Called by the player controller for the repair button, which mashes a jammed hand free. It has
+	 *  no other use while playing, so pressing it too often never costs a life. */
+	void HandleRepairPressed();
+
 	/** Called by the player controller when the lift button is pressed or released. */
 	void SetLiftHeld(bool bHeld);
 
@@ -306,8 +312,11 @@ public:
 	/** The lift's name on the input in use. Short for key caps ("LMB"), long for sentences ("LEFT CLICK"). */
 	FString GetLiftKey(bool bShort = true) const;
 
+	/** The repair button's name on the input in use ("SPACE", "Y", ...). */
+	FString GetRepairKey() const;
+
 	/** Replaces button tokens in text meant for the screen with the names for the input in use:
-	 *  {0} {1} {2} = the buttons, {LIFT} = the lift. Text that names buttons is written with these
+	 *  {0} {1} {2} = the buttons, {LIFT} = the lift, {REPAIR} = the repair button. Text that names buttons is written with these
 	 *  tokens so it always matches whatever the player is holding. */
 	FString ExpandKeys(const FString& Text) const;
 
@@ -321,13 +330,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tutorial")
 	float NoticeDuration = 2.5f;
 
+	/** When the tutorial ends, the hand keeps going and the run carries straight on as Endless from
+	 *  this level - the first one that matches everything the tutorial taught (two buttons, obstacles). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tutorial", meta = (ClampMin = "1"))
+	int32 TutorialHandoffLevel = 5;
+
 	// ---------------- Jam ----------------
 
 	/** Seconds of sparks before the hand jams. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam")
 	float JamSparkTime = 3.f;
 
-	/** Presses of the first button needed to fix a jam. */
+	/** Presses of the repair button needed to fix a jam. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam", meta = (ClampMin = "1"))
 	int32 JamPressesRequired = 5;
 
@@ -465,10 +479,15 @@ public:
 
 	// ---------------- Misses (Endless) ----------------
 
-	/** Separate, non-regenerating lives for missed target zones. Endless only - the tutorial can
-	 *  never be failed. Once these run out, the next miss ends the run. */
+	/** Separate lives for missed target zones (and wrong presses, and broken hands). Endless only -
+	 *  the tutorial can never be failed. Once these run out, the run ends. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Misses", meta = (ClampMin = "1"))
 	int32 MaxMissLives = 3;
+
+	/** One lost miss life comes back every time the run reaches a multiple of this many levels
+	 *  (5, 10, 15, ...). 0 = never. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Misses", meta = (ClampMin = "0"))
+	int32 MissRegenLevels = 5;
 
 	// ---------------- Tuning (Endless) ----------------
 
@@ -633,6 +652,27 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 LastRunScoreRank = 0;
 
+	// ---------------- Run stats (Endless, for the game-over breakdown) ----------------
+
+	/** Longest run of PERFECT hits in a row this run, and the highest combo multiplier it reached. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
+	int32 LongestPerfectStreak = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
+	int32 PeakMultiplier = 1;
+
+	/** Points the lift actually took off the score (the score never drops below 0, so it can be
+	 *  less than the time lifted would suggest). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
+	int32 PointsLostToLift = 0;
+
+	/** Obstacles the hand ran into, and obstacles it got over. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
+	int32 ObstaclesHit = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
+	int32 ObstaclesCleared = 0;
+
 	/** Which button (index into Prompts) the current zone requires. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 ActivePromptIndex = 0;
@@ -661,13 +701,17 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bOutOfLives = false;
 
-	/** Miss lives left this run (Endless only). These never regenerate. */
+	/** Miss lives left this run (Endless only). One comes back every MissRegenLevels levels. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 MissLives = 3;
 
 	/** World time of the last missed zone, used for HUD feedback. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float MissLifeLostTime = -1000.f;
+
+	/** World time a miss life last came back, used for HUD feedback. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float MissLifeGainedTime = -1000.f;
 
 	/** True if the run ended because the player missed too many target zones. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -838,6 +882,10 @@ private:
 	// Endless
 	/** Starts an Endless run: today's daily challenge, or a normal run with SelectedModifiers. */
 	void StartGame(bool bDaily = false);
+
+	/** The tutorial's last hit: carries straight on as a plain Endless run from TutorialHandoffLevel,
+	 *  without stopping or resetting the hand. */
+	void ContinueFromTutorial();
 	void OpenModifiers();
 
 	/** Run tuning with this run's modifiers applied. */
@@ -922,6 +970,10 @@ private:
 
 	/** The day (YYYYMMDD) a daily run was started on - its board, even if it ends after midnight. */
 	int32 RunDayKey = 0;
+
+	/** This run carried on from the tutorial, which already taught jams: they can happen from the
+	 *  handoff level, and their explanation screen is skipped. */
+	bool bRunFromTutorial = false;
 
 	/** Fraction of a point the lift has cost but not yet taken off the score. */
 	float LiftPointsDebt = 0.f;

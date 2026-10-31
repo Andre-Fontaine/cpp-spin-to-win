@@ -40,9 +40,9 @@ struct FSpinBriefLine
  *  - font sizes are in design points and are scaled internally;
  *  - text is positioned by the top of its line.
  *
- * In-run layout: three anchored modules along the top (run/score, level, health), a control strip
- * along the bottom, one callout slot above the dial for messages, and transient feedback (hit
- * grades, countdown) near the centre.
+ * In-run layout: two anchored modules along the top (run/score, level), health columns either side
+ * of the dial, the jam repair panel along the bottom, one callout slot above the dial for messages, and
+ * transient feedback (hit grades, countdown) near the centre.
  */
 UCLASS()
 class SPINTOWIN_API ASpinHUD : public AHUD
@@ -130,10 +130,11 @@ private:
 	/** Top-centre: level (or tutorial stage) progress, best level, and what the next level unlocks. */
 	void DrawLevelModule(const ASpinGameMode& GM, float CenterX, float Y);
 
-	/** Top-right: miss lives and obstacle lives as labelled pip rows, with -1 / +1 feedback. */
-	void DrawHealthModule(const ASpinGameMode& GM, float RightX, float Y);
+	/** Beside the dial: obstacle lives in a vertical pip column on its left, miss lives on its right,
+	 *  with -1 / +1 feedback. */
+	void DrawHealthColumns(const ASpinGameMode& GM);
 
-	/** Bottom: the keys in play (the one this zone needs lit) and the lift - or, while jammed, the repair panel. */
+	/** Bottom: the tutorial stage's one-line reminder - or, while jammed, the repair panel. */
 	void DrawControlStrip(const ASpinGameMode& GM, float CenterX, float BottomY);
 	void DrawRepairPanel(const ASpinGameMode& GM, float CenterX, float BottomY);
 
@@ -163,7 +164,6 @@ private:
 	void DrawProfileSelect(const ASpinGameMode& GM);
 	void DrawNameEntry(const ASpinGameMode& GM);
 	void DrawGameOver(const ASpinGameMode& GM);
-	void DrawTutorialComplete(const ASpinGameMode& GM);
 
 	/** The explanation screens (new mechanic unlocks, tutorial stages): eyebrow tag, title, lines,
 	 *  and what to press to continue. */

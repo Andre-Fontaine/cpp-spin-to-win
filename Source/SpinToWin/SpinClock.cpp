@@ -69,6 +69,13 @@ ASpinClock::ASpinClock()
 		ZoneSegments.Add(Segment);
 	}
 
+	for (int32 i = 0; i < NumZoneMarks; ++i)
+	{
+		UStaticMeshComponent* Mark = MakeMesh(*FString::Printf(TEXT("ZoneMark%d"), i), CubeMesh, Root);
+		Mark->SetCastShadow(false);
+		ZoneMarks.Add(Mark);
+	}
+
 	for (int32 i = 0; i < NumRingSegments; ++i)
 	{
 		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("OuterRing%d"), i), CubeMesh, Root);
@@ -177,6 +184,22 @@ void ASpinClock::BuildVisuals()
 		for (UStaticMeshComponent* Segment : ZoneSegments)
 		{
 			Segment->SetMaterial(0, ZoneMID);
+		}
+
+		// Grade lines glow: the emissive neon material when it's available, otherwise the plain lit one.
+		// The outer pair (index 0 and 3) marks GOOD, the inner pair marks PERFECT, see UpdateZone.
+		UMaterialInterface* MarkMaterial = NeonMaterial ? NeonMaterial.Get() : BaseMaterial.Get();
+		PerfectMarkMID = UMaterialInstanceDynamic::Create(MarkMaterial, this);
+		GoodMarkMID = UMaterialInstanceDynamic::Create(MarkMaterial, this);
+		if (PerfectMarkMID && GoodMarkMID)
+		{
+			PerfectMarkMID->SetVectorParameterValue(ColorParam, PerfectMarkColor);
+			GoodMarkMID->SetVectorParameterValue(ColorParam, GoodMarkColor);
+		}
+		for (int32 i = 0; i < ZoneMarks.Num(); ++i)
+		{
+			const bool bGood = i == 0 || i == ZoneMarks.Num() - 1;
+			ZoneMarks[i]->SetMaterial(0, bGood ? GoodMarkMID : PerfectMarkMID);
 		}
 
 		// Sparks glow: the emissive neon material when it's available (pushed well past 1 so it
@@ -432,6 +455,10 @@ void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 		{
 			Segment->SetVisibility(bShow);
 		}
+		for (UStaticMeshComponent* Mark : ZoneMarks)
+		{
+			Mark->SetVisibility(bShow);
+		}
 	}
 
 	if (!bShow || ZoneSegments.Num() == 0)
@@ -463,6 +490,20 @@ void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 		Segment->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 1.5f));
 		Segment->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
 		Segment->SetRelativeScale3D(FVector(RadialLength / 100.f, TangentLength / 100.f, 3.f / 100.f));
+	}
+
+	// Neon lines across the band where the hit grades change: inside the inner pair is PERFECT,
+	// out to the outer pair is GOOD, beyond that is OK. Raised just above the band so they show.
+	const float MarkFractions[NumZoneMarks] = { -GM.GoodFraction, -GM.PerfectFraction, GM.PerfectFraction, GM.GoodFraction };
+	for (int32 i = 0; i < ZoneMarks.Num() && i < NumZoneMarks; ++i)
+	{
+		const float AngleDeg = GM.ZoneCenter + MarkFractions[i] * GM.ZoneHalfWidth;
+		const float Rad = FMath::DegreesToRadians(AngleDeg);
+
+		UStaticMeshComponent* Mark = ZoneMarks[i];
+		Mark->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 3.2f));
+		Mark->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
+		Mark->SetRelativeScale3D(FVector(RadialLength * 0.92f / 100.f, ZoneMarkWidth / 100.f, 0.5f / 100.f));
 	}
 }
 
@@ -770,7 +811,12 @@ void ASpinClock::UpdateShake(float DeltaSeconds)
 FVector ASpinClock::GetZoneWorldLocation(float RadiusFraction) const
 {
 	const ASpinGameMode* GM = GameMode.Get();
-	const float Rad = GM ? FMath::DegreesToRadians(GM->ZoneCenter) : 0.f;
+	return GetDialWorldLocation(GM ? GM->ZoneCenter : 0.f, RadiusFraction);
+}
+
+FVector ASpinClock::GetDialWorldLocation(float Angle, float RadiusFraction) const
+{
+	const float Rad = FMath::DegreesToRadians(Angle);
 	const FVector Direction(FMath::Cos(Rad), FMath::Sin(Rad), 0.f);
 	return GetActorLocation() + Direction * (DialRadius * RadiusFraction) + FVector(0.f, 0.f, 12.f);
 }

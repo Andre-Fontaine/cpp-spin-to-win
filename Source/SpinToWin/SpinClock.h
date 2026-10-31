@@ -67,6 +67,9 @@ public:
 	/** World-space point on the dial at the target zone's angle. RadiusFraction 0 = centre, 1 = rim. */
 	FVector GetZoneWorldLocation(float RadiusFraction) const;
 
+	/** World-space point on the dial at any angle (degrees, 0 = 12 o'clock, clockwise). */
+	FVector GetDialWorldLocation(float Angle, float RadiusFraction) const;
+
 	// ---------------- Lift ----------------
 
 	/** Tell the clock the lift button was pressed or released. bValidPress says lifting is allowed
@@ -130,6 +133,17 @@ public:
 	/** Thickness of the target zone band as a fraction of the dial radius. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
 	float ZoneThicknessFraction = 0.2f;
+
+	/** The neon grade lines across the zone: width in world units, and the glow colour of the
+	 *  PERFECT and GOOD boundaries (values above 1 bloom). */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	float ZoneMarkWidth = 3.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	FLinearColor PerfectMarkColor = FLinearColor(4.f, 2.8f, 0.5f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	FLinearColor GoodMarkColor = FLinearColor(2.f, 2.f, 2.2f);
 
 	// ---------------- Neon ring highlights ----------------
 
@@ -236,6 +250,8 @@ private:
 	void UpdateSparks(float DeltaSeconds);
 
 	static constexpr int32 NumZoneSegments = 48;
+	/** PERFECT and GOOD boundaries, either side of the zone's centre. */
+	static constexpr int32 NumZoneMarks = 4;
 	static constexpr int32 NumObstacleSlots = 4;
 	static constexpr int32 NumSparks = 80;
 	/** Radius of the hub pillar at the centre, as a fraction of the dial radius. */
@@ -262,6 +278,9 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ZoneSegments;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> ZoneMarks;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> OuterRingSegments;
@@ -293,6 +312,12 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> ZoneMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> PerfectMarkMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> GoodMarkMID;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> OuterRingMID;

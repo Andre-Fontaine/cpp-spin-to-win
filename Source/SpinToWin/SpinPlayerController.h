@@ -12,9 +12,10 @@
  *   Hit button 1: D / Gamepad B (Circle)
  *   Hit button 2: A / Gamepad X (Square)
  *   Lift (hold):  Left Mouse Button / Gamepad Right Trigger (R2)
+ *   Repair:       Space / Gamepad Y (Triangle) - mashes a jammed hand free
  *
  * The same Left Mouse Button also drives the menus: on the menu screens (main menu, mode select,
- * settings, leaderboard, profiles, name entry, miss-pause, game over, tutorial complete) a click is tested against the HUD's clickable regions instead of being
+ * settings, leaderboard, profiles, name entry, game over) a click is tested against the HUD's clickable regions instead of being
  * treated as a lift. The mouse cursor is shown automatically whenever one of those screens is up.
  */
 UCLASS()
@@ -38,6 +39,7 @@ private:
 	void OnButton2();
 	void OnLiftPressed();
 	void OnLiftReleased();
+	void OnRepair();
 	void PressButton(int32 ButtonIndex);
 	void SetLift(bool bHeld);
 
