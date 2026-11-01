@@ -128,11 +128,18 @@ void ASpinHUD::DrawHUD()
 	case ESpinState::WaitingToStart:   DrawMainMenu(*GM); break;
 	case ESpinState::ModeSelect:       DrawModeSelect(*GM); break;
 	case ESpinState::ModifierSelect:   DrawModifierSelect(*GM); break;
+	case ESpinState::BonusSelect:      DrawBonusSelect(*GM); break;
 	case ESpinState::SettingsMenu:     DrawSettings(*GM); break;
 	case ESpinState::Leaderboard:      DrawLeaderboard(*GM); break;
 	case ESpinState::ProfileSelect:    DrawProfileSelect(*GM); break;
 	case ESpinState::NameEntry:        DrawNameEntry(*GM); break;
-	case ESpinState::Playing:          DrawRunHUD(*GM); break;
+	case ESpinState::Playing:
+		DrawRunHUD(*GM);
+		if (GM->IsPauseMenuOpen())
+		{
+			DrawPauseMenu(*GM);
+		}
+		break;
 	case ESpinState::GameOver:         DrawGameOver(*GM); break;
 
 	case ESpinState::NewButtonIntro:
@@ -507,6 +514,20 @@ void ASpinHUD::DrawMenuButton(float X, float Y, float W, float H, const FString&
 	}
 }
 
+void ASpinHUD::DrawBonusBadge(float X, float CenterY)
+{
+	const float Size = U(18.f);
+	const float Y = CenterY - Size * 0.5f;
+	DrawRect(Fade(Green, 0.2f), X, Y, Size, Size);
+	DrawOutline(X, Y, Size, Size, Green, FMath::Max(1.f, U(1.5f)));
+
+	// A plus sign.
+	const float Arm = Size * 0.5f;
+	const float Thick = FMath::Max(2.f, U(2.5f));
+	DrawRect(Green, X + (Size - Arm) * 0.5f, CenterY - Thick * 0.5f, Arm, Thick);
+	DrawRect(Green, X + (Size - Thick) * 0.5f, CenterY - Arm * 0.5f, Thick, Arm);
+}
+
 void ASpinHUD::DrawBackdrop(float Opacity)
 {
 	DrawRect(FLinearColor(0.004f, 0.008f, 0.02f, Opacity), 0.f, 0.f, ScreenW, ScreenH);
@@ -619,6 +640,10 @@ void ASpinHUD::DrawRunModule(const ASpinGameMode& GM, float X, float Y)
 	if (GM.RunModifiers != 0)
 	{
 		Header += TEXT("   MODS ") + FormatMultiplier(GM.RunPointsMultiplier);
+	}
+	if (GM.RunBonuses != 0)
+	{
+		Header += TEXT("   +BONUS");
 	}
 	DrawLabel(Header, X + P, HeaderY, TinySize, GM.RunModifiers != 0 ? Purple : TextDim, ESpinTextAlign::Left, true);
 	DrawLabel(GM.GetPlayerName(), X + W - P, HeaderY, TinySize, Cyan, ESpinTextAlign::Right, true);
@@ -897,13 +922,13 @@ void ASpinHUD::DrawRepairPanel(const ASpinGameMode& GM, float CenterX, float Bot
 	DrawKeyCap(Key, MashX + MashW, Y + MashY + (MashRowH - CapH) * 0.5f, HeadingSize, FMath::Lerp(Orange, Gold, Throb), Throb > 0.5f);
 
 	DrawLabel(TEXT("REPAIR"), X + P, Y + RepairLabelY, TinySize, TextDim, ESpinTextAlign::Left, true);
-	DrawLabel(FString::Printf(TEXT("%d / %d"), GM.JamPresses, GM.JamPressesRequired), X + W - P, Y + RepairLabelY, TinySize, TextMain, ESpinTextAlign::Right, true);
-	DrawSegments(X + P, Y + SegY, W - P * 2.f, SegH, GM.JamPressesRequired, GM.JamPresses, Green);
+	DrawLabel(FString::Printf(TEXT("%d / %d"), GM.JamPresses, GM.GetRunJamPressesRequired()), X + W - P, Y + RepairLabelY, TinySize, TextMain, ESpinTextAlign::Right, true);
+	DrawSegments(X + P, Y + SegY, W - P * 2.f, SegH, GM.GetRunJamPressesRequired(), GM.JamPresses, Green);
 
 	const float TimeFraction = GM.GetJamTimeFraction();
 	DrawBar(X + P, Y + TimeY, W - P * 2.f, TimeH, TimeFraction, Red);
 	DrawLabel(TEXT("BEFORE THE HAND BREAKS"), X + P, Y + TimeLabelY, TinySize, Red, ESpinTextAlign::Left, true);
-	DrawLabel(FString::Printf(TEXT("%.1fs"), GM.JamTimeLimit * TimeFraction), X + W - P, Y + TimeLabelY, TinySize, Red, ESpinTextAlign::Right, true);
+	DrawLabel(FString::Printf(TEXT("%.1fs"), GM.GetRunJamTimeLimit() * TimeFraction), X + W - P, Y + TimeLabelY, TinySize, Red, ESpinTextAlign::Right, true);
 
 	DrawLabel(FString::Printf(TEXT("Only %s works while jammed - zones and obstacles are ignored"), *Key), CenterX, Y + RuleY, TinySize, TextFaint, ESpinTextAlign::Center);
 }
@@ -1221,9 +1246,13 @@ void ASpinHUD::DrawModifierSelect(const ASpinGameMode& GM)
 		const float RowY = Y + P + i * RowH;
 		const float RowW = PanelW - P * 2.f;
 
-		if (IsHovered(RowX, RowY, RowW, RowH))
+		if (IsHovered(RowX, RowY, RowW, RowH) || GM.MenuFocus == i)
 		{
 			DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.04f), RowX, RowY, RowW, RowH);
+		}
+		if (GM.MenuFocus == i)
+		{
+			DrawFocusRing(RowX, RowY, RowW, RowH);
 		}
 		if (i > 0)
 		{
@@ -1251,13 +1280,172 @@ void ASpinHUD::DrawModifierSelect(const ASpinGameMode& GM)
 	const float Total = ASpinGameMode::GetModifiersMultiplier(GM.SelectedModifiers);
 	DrawLabel(TEXT("POINTS MULTIPLIER"), X + P + U(12.f), FooterY + (LineH(HeadingSize) - LineH(SmallSize)) * 0.5f, SmallSize, TextDim, ESpinTextAlign::Left, true);
 	DrawLabel(FormatMultiplier(Total), X + PanelW - P - U(12.f), FooterY, HeadingSize, GM.SelectedModifiers != 0 ? Gold : TextFaint, ESpinTextAlign::Right, true);
-	Y += P * 2.f + NumModifiers * RowH + FooterH + U(28.f);
+	Y += P * 2.f + NumModifiers * RowH + FooterH + U(18.f);
+
+	// The bonus loadout this run will use.
+	const int32 Equipped = GM.GetEquippedBonuses();
+	DrawLabel(Equipped != 0 ? FString::Printf(TEXT("BONUSES:  %s"), *ASpinGameMode::GetBonusNames(Equipped)) : FString(TEXT("NO BONUSES ON")),
+		CX, Y, SmallSize, Equipped != 0 ? Green : TextFaint, ESpinTextAlign::Center, true);
+	Y += LineH(SmallSize) + U(18.f);
+
+	const float BtnGap = U(16.f);
+	const float BtnW = FMath::Min(U(230.f), (PanelW - BtnGap * 2.f) / 3.f);
+	const float BtnH = U(60.f);
+	const float BtnX = CX - BtnW * 1.5f - BtnGap;
+	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("START"), EMenuAction::StartEndless, Gold, GM.GetPauseKey());
+	DrawMenuButton(BtnX + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("BONUSES"), EMenuAction::OpenBonuses, Green, KeyHintOf(GM, 2));
+	DrawMenuButton(BtnX + (BtnW + BtnGap) * 2.f, Y, BtnW, BtnH, TEXT("BACK"), EMenuAction::Back, TextDim, KeyHintOf(GM, 1));
+	for (int32 i = 0; i < 3; ++i)
+	{
+		if (GM.MenuFocus == NumModifiers + i)
+		{
+			DrawFocusRing(BtnX + (BtnW + BtnGap) * i, Y, BtnW, BtnH);
+		}
+	}
+	DrawNavHint(GM, CX, Y + BtnH + U(16.f));
+}
+
+void ASpinHUD::DrawBonusSelect(const ASpinGameMode& GM)
+{
+	DrawBackdrop(0.78f);
+
+	const float CX = ScreenW * 0.5f;
+	float Y = DrawScreenTitle(TEXT("BONUSES"), TEXT("Earned by playing - they make a run more forgiving, and mark it on the leaderboard"), CX, ScreenH * 0.08f, Green);
+
+	const float PanelW = FMath::Min(U(760.f), ScreenW - U(Margin) * 2.f);
+	const float X = CX - PanelW * 0.5f;
+	const float P = U(Pad);
+
+	// Slots: one box per slot, filled when used, with the level that opens each locked one.
+	const int32 Slots = GM.GetBonusSlots();
+	const int32 Equipped = GM.GetEquippedBonuses();
+	const int32 Used = FMath::CountBits(static_cast<uint64>(Equipped));
+	const bool bFull = Used >= Slots;
+	{
+		const float Box = U(30.f);
+		const float BoxGap = U(10.f);
+		const int32 SlotLevels[] = { 0, GM.SecondSlotLevel, GM.ThirdSlotLevel };
+		const float LabelW = MeasureText(TEXT("SLOTS"), SmallSize, true).X + U(14.f);
+		const float RowW = LabelW + 3.f * Box + 2.f * BoxGap;
+		float BoxX = CX - RowW * 0.5f;
+		DrawLabel(TEXT("SLOTS"), BoxX, Y + (Box - LineH(SmallSize)) * 0.5f, SmallSize, TextDim, ESpinTextAlign::Left, true);
+		BoxX += LabelW;
+		for (int32 i = 0; i < 3; ++i, BoxX += Box + BoxGap)
+		{
+			if (i < Slots)
+			{
+				DrawRect(i < Used ? Green : TrackColor, BoxX, Y, Box, Box);
+				DrawOutline(BoxX, Y, Box, Box, Green, FMath::Max(1.f, U(2.f)));
+			}
+			else
+			{
+				DrawOutline(BoxX, Y, Box, Box, PanelEdge, FMath::Max(1.f, U(1.f)));
+				DrawLabel(FString::Printf(TEXT("%d"), SlotLevels[i]), BoxX + Box * 0.5f, Y + (Box - LineH(TinySize)) * 0.5f, TinySize, TextFaint, ESpinTextAlign::Center, true);
+			}
+		}
+		Y += Box + U(6.f);
+		const int32 NextLevel = GM.GetNextBonusSlotLevel();
+		DrawLabel(NextLevel > 0 ? FString::Printf(TEXT("Reach level %d for another slot"), NextLevel) : FString(TEXT("All slots open")),
+			CX, Y, TinySize, TextFaint, ESpinTextAlign::Center);
+		Y += LineH(TinySize) + U(16.f);
+	}
+
+	const int32 NumBonuses = static_cast<int32>(ESpinBonus::Count);
+	const float RowH = U(72.f);
+	DrawPanel(X, Y, PanelW, P * 2.f + NumBonuses * RowH, Green);
+
+	for (int32 i = 0; i < NumBonuses; ++i)
+	{
+		const ESpinBonus Bonus = static_cast<ESpinBonus>(i);
+		const FSpinBonusInfo& Info = ASpinGameMode::GetBonusInfo(Bonus);
+		const bool bUnlocked = GM.IsBonusUnlocked(Bonus);
+		const bool bOn = (Equipped & (1 << i)) != 0;
+		const bool bCanToggle = bUnlocked && (bOn || !bFull);
+		const float RowX = X + P;
+		const float RowY = Y + P + i * RowH;
+		const float RowW = PanelW - P * 2.f;
+		const float RightX = RowX + RowW - U(12.f);
+
+		// Locked rows can still be highlighted, to read what they need.
+		if ((bCanToggle && IsHovered(RowX, RowY, RowW, RowH)) || GM.MenuFocus == i)
+		{
+			DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.04f), RowX, RowY, RowW, RowH);
+		}
+		if (GM.MenuFocus == i)
+		{
+			DrawFocusRing(RowX, RowY, RowW, RowH);
+		}
+		if (i > 0)
+		{
+			DrawRect(PanelEdge, RowX, RowY, RowW, FMath::Max(1.f, U(1.f)));
+		}
+
+		// Check box, or an empty dimmed one while locked.
+		const float Box = U(26.f);
+		const float BoxX = RowX + U(12.f);
+		const float BoxY = RowY + (RowH - Box) * 0.5f;
+		DrawRect(bOn ? Green : TrackColor, BoxX, BoxY, Box, Box);
+		DrawOutline(BoxX, BoxY, Box, Box, bOn ? Green : PanelEdge, FMath::Max(1.f, U(2.f)));
+
+		const float TextX = BoxX + Box + U(16.f);
+		const float NameY = RowY + (RowH - LineH(BodySize) - LineH(SmallSize)) * 0.5f;
+		DrawLabel(Info.Name, TextX, NameY, BodySize, bOn ? TextMain : bUnlocked ? TextDim : TextFaint, ESpinTextAlign::Left, true);
+		DrawLabel(Info.Description, TextX, NameY + LineH(BodySize), SmallSize, bUnlocked ? TextDim : TextFaint);
+
+		if (bUnlocked)
+		{
+			const TCHAR* Status = bOn ? TEXT("ON") : bFull ? TEXT("SLOTS FULL") : TEXT("OFF");
+			DrawLabel(Status, RightX, RowY + (RowH - LineH(SmallSize)) * 0.5f, SmallSize, bOn ? Green : TextFaint, ESpinTextAlign::Right, true);
+		}
+		else
+		{
+			// Locked: what it takes, and how close they are.
+			int32 Current = 0, Target = 1;
+			GM.GetBonusProgress(Bonus, Current, Target);
+			const float BarW = U(170.f);
+			const float ReqY = RowY + (RowH - LineH(TinySize) - U(6.f) - LineH(TinySize)) * 0.5f;
+			DrawLabel(FString::Printf(TEXT("LOCKED  -  %s"), Info.Requirement), RightX, ReqY, TinySize, Gold, ESpinTextAlign::Right, true);
+			DrawBar(RightX - BarW, ReqY + LineH(TinySize) + U(3.f), BarW, U(4.f), static_cast<float>(Current) / FMath::Max(1, Target), Fade(Gold, 0.7f));
+			DrawLabel(FString::Printf(TEXT("%d / %d"), FMath::Min(Current, Target), Target), RightX, ReqY + LineH(TinySize) + U(6.f) + U(1.f), TinySize, TextDim, ESpinTextAlign::Right);
+		}
+
+		if (bCanToggle)
+		{
+			AddRegion(RowX, RowY, RowW, RowH, EMenuAction::ToggleBonus, i);
+		}
+	}
+	Y += P * 2.f + NumBonuses * RowH + U(28.f);
 
 	const float BtnW = U(260.f);
 	const float BtnH = U(60.f);
 	const float BtnGap = U(20.f);
-	DrawMenuButton(CX - BtnGap * 0.5f - BtnW, Y, BtnW, BtnH, TEXT("START"), EMenuAction::StartEndless, Gold, KeyHintOf(GM, 0));
-	DrawMenuButton(CX + BtnGap * 0.5f, Y, BtnW, BtnH, TEXT("BACK"), EMenuAction::Back, TextDim, KeyHintOf(GM, 1));
+	const float BtnX = CX - BtnGap * 0.5f - BtnW;
+	DrawMenuButton(BtnX, Y, BtnW, BtnH, TEXT("START"), EMenuAction::StartEndless, Gold, GM.GetPauseKey());
+	DrawMenuButton(BtnX + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("BACK"), EMenuAction::Back, TextDim, KeyHintOf(GM, 1));
+	for (int32 i = 0; i < 2; ++i)
+	{
+		if (GM.MenuFocus == NumBonuses + i)
+		{
+			DrawFocusRing(BtnX + (BtnW + BtnGap) * i, Y, BtnW, BtnH);
+		}
+	}
+	DrawNavHint(GM, CX, Y + BtnH + U(16.f));
+}
+
+void ASpinHUD::DrawFocusRing(float X, float Y, float W, float H)
+{
+	const float Out = U(3.f);
+	DrawOutline(X - Out, Y - Out, W + Out * 2.f, H + Out * 2.f, Fade(TextMain, 0.45f + 0.55f * Pulse01(Now, 6.f)), FMath::Max(1.f, U(2.f)));
+}
+
+void ASpinHUD::DrawNavHint(const ASpinGameMode& GM, float CenterX, float Y)
+{
+	const bool bPad = GM.InputStyle != ESpinInputStyle::Keyboard;
+	const FString Text = FString::Printf(TEXT("%s  move        %s  select        %s  start run"),
+		bPad ? TEXT("D-PAD") : TEXT("ARROWS"),
+		*(bPad ? GM.GetButtonKey(0) : GM.GetButtonKey(0) + TEXT(" / ENTER")),
+		*GM.GetPauseKey());
+	DrawLabel(Text, CenterX, Y, TinySize, TextFaint, ESpinTextAlign::Center, true);
 }
 
 void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
@@ -1370,10 +1558,16 @@ void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
 			const FString Points = FormatPoints(Run.Points);
 			DrawLabel(FString::FromInt(i + 1), RankX, TextY, SmallSize, i == 0 ? Gold : TextDim, ESpinTextAlign::Left, true);
 			const float NameW = DrawLabel(Run.PlayerName.IsEmpty() ? FString(TEXT("???")) : Run.PlayerName, NameX, TextY, SmallSize, bMine ? Cyan : TextMain, ESpinTextAlign::Left, bMine);
-			// Runs played with modifiers carry their bonus, so a boosted score reads as one.
+			// Runs played with modifiers carry their bonus, so a boosted score reads as one, and runs
+			// that used bonuses carry a badge.
+			float TagX = NameX + NameW + U(8.f);
 			if (Run.Modifiers != 0)
 			{
-				DrawLabel(FormatMultiplier(ASpinGameMode::GetModifiersMultiplier(Run.Modifiers)), NameX + NameW + U(8.f), TextY, TinySize, Purple, ESpinTextAlign::Left, true);
+				TagX += DrawLabel(FormatMultiplier(ASpinGameMode::GetModifiersMultiplier(Run.Modifiers)), TagX, TextY, TinySize, Purple, ESpinTextAlign::Left, true) + U(6.f);
+			}
+			if (Run.Bonuses != 0)
+			{
+				DrawBonusBadge(TagX, ThisRowY + RowH * 0.5f);
 			}
 			DrawLabel(bByLevel ? Level : Points, PrimaryRight, TextY, SmallSize, i == 0 ? Gold : TextMain, ESpinTextAlign::Right, true);
 			DrawLabel(bByLevel ? Points : Level, SecondaryRight, TextY, SmallSize, TextDim, ESpinTextAlign::Right);
@@ -1385,7 +1579,14 @@ void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
 	DrawBoard(CX + PanelW * 0.5f + Gap, TEXT("TODAY'S DAILY"), Purple, Save ? Save->GetDailyBoard(ASpinGameMode::GetTodayKey()) : nullptr, GM.LastRunDailyRank, false);
 
 	Y += PanelH + U(14.f);
-	DrawLabel(TEXT("Green row = your last run      Cyan name = you"), CX, Y, TinySize, TextFaint, ESpinTextAlign::Center);
+	const FString Legend = TEXT("Green row = your last run      Cyan name = you      ");
+	const FString BonusLegend = TEXT("= played with bonuses");
+	const float BadgeW = U(18.f) + U(6.f);
+	const float LegendW = MeasureText(Legend, TinySize).X + BadgeW + MeasureText(BonusLegend, TinySize).X;
+	float LegendX = CX - LegendW * 0.5f;
+	LegendX += DrawLabel(Legend, LegendX, Y, TinySize, TextFaint);
+	DrawBonusBadge(LegendX, Y + LineH(TinySize) * 0.5f);
+	DrawLabel(BonusLegend, LegendX + BadgeW, Y, TinySize, TextFaint);
 	Y += LineH(TinySize) + U(20.f);
 
 	const float BackW = U(220.f);
@@ -1573,10 +1774,17 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 		RunKind = FString::Printf(TEXT("%s  (%s POINTS)"), *ASpinGameMode::GetModifierNames(GM.RunModifiers), *FormatMultiplier(GM.RunPointsMultiplier));
 	}
 	const float RunKindH = RunKind.IsEmpty() ? 0.f : LineH(SmallSize) + U(4.f);
+	const FString Bonuses = GM.RunBonuses != 0 ? FString::Printf(TEXT("BONUSES:  %s"), *ASpinGameMode::GetBonusNames(GM.RunBonuses)) : FString();
+	const float BonusesH = Bonuses.IsEmpty() ? 0.f : LineH(SmallSize) + U(4.f);
+
+	// What this run unlocked, in a strip of its own above the buttons.
+	const FString Unlocks = FString::Join(GM.NewUnlocks, TEXT("   +   "));
+	const float UnlockPad = U(12.f);
+	const float UnlockH = Unlocks.IsEmpty() ? 0.f : UnlockPad * 2.f + LineH(TinySize) + LineH(HeadingSize) + LineH(TinySize) + U(16.f);
 
 	const float StatPad = U(12.f);
 	const float StatH = StatPad * 2.f + LineH(TinySize) * 2.f + LineH(HeadingSize);
-	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + U(26.f) + TileH + U(16.f) + StatH + U(28.f) + BtnH + P;
+	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + BonusesH + U(26.f) + TileH + U(16.f) + StatH + UnlockH + U(28.f) + BtnH + P;
 	const float X = CX - CardW * 0.5f;
 	float Y = (ScreenH - CardH) * 0.5f;
 	DrawPanel(X, Y, CardW, CardH, Red);
@@ -1592,6 +1800,11 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	{
 		DrawLabel(RunKind, CX, Y + U(4.f), SmallSize, Purple, ESpinTextAlign::Center, true);
 		Y += RunKindH;
+	}
+	if (!Bonuses.IsEmpty())
+	{
+		DrawLabel(Bonuses, CX, Y + U(4.f), SmallSize, Green, ESpinTextAlign::Center, true);
+		Y += BonusesH;
 	}
 	Y += U(26.f);
 
@@ -1670,7 +1883,27 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	DrawStat(0, TEXT("LONGEST COMBO"), FString::FromInt(GM.LongestPerfectStreak), ComboDetail, GM.PeakMultiplier > 1 ? Gold : TextMain);
 	DrawStat(1, TEXT("LOST TO LIFTING"), GM.PointsLostToLift > 0 ? TEXT("-") + FormatPoints(GM.PointsLostToLift) : FString(TEXT("0")), TEXT("points"), GM.PointsLostToLift > 0 ? Red : TextMain);
 	DrawStat(2, TEXT("OBSTACLES HIT"), FString::FromInt(GM.ObstaclesHit), ObstacleDetail, GM.ObstaclesHit > 0 ? Red : TextMain);
-	Y += StatH + U(28.f);
+	Y += StatH;
+
+	if (!Unlocks.IsEmpty())
+	{
+		Y += U(16.f);
+		const float StripX = X + P;
+		const float StripW = CardW - P * 2.f;
+		const float StripH = UnlockH - U(16.f);
+		const float Glow = Pulse01(Now, 4.f);
+		DrawRect(Fade(Green, 0.08f + 0.06f * Glow), StripX, Y, StripW, StripH);
+		DrawOutline(StripX, Y, StripW, StripH, Fade(Green, 0.6f + 0.4f * Glow), FMath::Max(1.f, U(2.f)));
+
+		float StripY = Y + UnlockPad;
+		DrawLabel(TEXT("UNLOCKED"), CX, StripY, TinySize, Green, ESpinTextAlign::Center, true);
+		StripY += LineH(TinySize);
+		DrawLabel(Unlocks, CX, StripY, HeadingSize, TextMain, ESpinTextAlign::Center, true);
+		StripY += LineH(HeadingSize);
+		DrawLabel(TEXT("Set up your bonuses from the modifier screen before a run"), CX, StripY, TinySize, TextDim, ESpinTextAlign::Center);
+		Y += StripH;
+	}
+	Y += U(28.f);
 
 	// Shown straight away but only clickable after the short delay, so a press meant for the hand
 	// can't land on one by accident.
@@ -1680,6 +1913,59 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RETRY"), EMenuAction::RetryGame, Gold, KeyHintOf(GM, 0), bReady);
 	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, KeyHintOf(GM, 1), bReady);
 	DrawMenuButton(X + P + (BtnW + BtnGap) * 2.f, Y, BtnW, BtnH, TEXT("QUIT"), EMenuAction::QuitGame, Red, FString(), bReady);
+}
+
+void ASpinHUD::DrawPauseMenu(const ASpinGameMode& GM)
+{
+	DrawBackdrop(0.7f);
+
+	const float CX = ScreenW * 0.5f;
+	const float CardW = FMath::Min(U(520.f), ScreenW - U(Margin) * 2.f);
+	const float P = U(32.f);
+	const float BtnH = U(60.f);
+	const float BtnGap = U(14.f);
+	const float PromptSize = 18.f;
+
+	// Where the run is, so the player knows what they'd be restarting or leaving.
+	FString Eyebrow;
+	if (GM.IsTutorial())
+	{
+		Eyebrow = FString::Printf(TEXT("TUTORIAL  -  STAGE %d / %d"), GM.TutorialIndex + 1, GM.TutorialLevels.Num());
+	}
+	else
+	{
+		Eyebrow = FString::Printf(TEXT("%s  -  LEVEL %d"), GM.bDailyRun ? TEXT("DAILY CHALLENGE") : TEXT("ENDLESS"), GM.GetLevel());
+	}
+	const FString Warning = GM.IsTutorial() ? FString() : FString(TEXT("Restarting or leaving won't save this run."));
+	const float WarningH = Warning.IsEmpty() ? 0.f : LineH(SmallSize) + U(14.f);
+
+	const float CardH = P + LineH(TinySize) + U(6.f) + LineH(TitleSize) + U(24.f) + BtnH * 3.f + BtnGap * 2.f + U(20.f) + WarningH + KeyCapHeight(PromptSize) + P;
+	const float X = CX - CardW * 0.5f;
+	float Y = (ScreenH - CardH) * 0.5f;
+	DrawPanel(X, Y, CardW, CardH, Cyan);
+	Y += P;
+
+	DrawLabel(Eyebrow, CX, Y, TinySize, Cyan, ESpinTextAlign::Center, true);
+	Y += LineH(TinySize) + U(6.f);
+	DrawLabel(TEXT("PAUSED"), CX, Y, TitleSize, Gold, ESpinTextAlign::Center, true);
+	Y += LineH(TitleSize) + U(24.f);
+
+	// Same order as the hit buttons, which pick them (see ASpinGameMode::HandleButtonPressed).
+	const float BtnW = CardW - P * 2.f;
+	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RESUME"), EMenuAction::ResumeGame, Gold, KeyHintOf(GM, 0));
+	Y += BtnH + BtnGap;
+	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RESTART"), EMenuAction::RestartRun, Cyan, KeyHintOf(GM, 1));
+	Y += BtnH + BtnGap;
+	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::QuitRunToMenu, Red, KeyHintOf(GM, 2));
+	Y += BtnH + U(20.f);
+
+	if (!Warning.IsEmpty())
+	{
+		DrawLabel(Warning, CX, Y, SmallSize, TextDim, ESpinTextAlign::Center);
+		Y += WarningH;
+	}
+
+	DrawKeyPrompt(TEXT("Press"), GM.GetPauseKey(), TEXT("to resume"), CX, Y, PromptSize, Gold);
 }
 
 void ASpinHUD::DrawBriefing(const FString& Eyebrow, const FString& Title, const TArray<FSpinBriefLine>& Lines,

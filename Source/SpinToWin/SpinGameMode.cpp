@@ -233,7 +233,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	// Clamp so a frame hitch can't make the hand skip over the zone.
 	const float Dt = FMath::Min(DeltaSeconds, 0.05f);
 
-	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::ModifierSelect || State == ESpinState::SettingsMenu
+	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::ModifierSelect || State == ESpinState::BonusSelect || State == ESpinState::SettingsMenu
 		|| State == ESpinState::Leaderboard || State == ESpinState::ProfileSelect || State == ESpinState::NameEntry)
 	{
 		// Slow idle spin behind the menus.
@@ -337,6 +337,17 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 
 void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 {
+	// Mirrors the pause menu's buttons: resume, restart, main menu.
+	if (IsPauseMenuOpen())
+	{
+		static const EMenuAction PauseActions[] = { EMenuAction::ResumeGame, EMenuAction::RestartRun, EMenuAction::QuitRunToMenu };
+		if (ButtonIndex >= 0 && ButtonIndex < UE_ARRAY_COUNT(PauseActions))
+		{
+			HandleMenuAction(PauseActions[ButtonIndex]);
+		}
+		return;
+	}
+
 	switch (State)
 	{
 	case ESpinState::WaitingToStart:
@@ -369,14 +380,32 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 
 	case ESpinState::ModifierSelect:
-		// First button: start. Second button: back to mode select. Toggling modifiers is mouse-only.
+		// First button: whatever is highlighted (START until the player moves - see HandleMenuNav).
+		// Second button: back to mode select. Third: bonuses.
 		if (ButtonIndex == 0)
 		{
-			StartGame();
+			ActivateMenuFocus();
 		}
 		else if (ButtonIndex == 1)
 		{
 			OpenModeSelect();
+		}
+		else if (ButtonIndex == 2)
+		{
+			OpenBonuses();
+		}
+		break;
+
+	case ESpinState::BonusSelect:
+		// First button: whatever is highlighted. Second button: back to the modifier screen.
+		if (ButtonIndex == 0)
+		{
+			ActivateMenuFocus();
+		}
+		else if (ButtonIndex == 1)
+		{
+			OpenModifiers();
+			MenuFocus = GetFocusRowCount() + 1; // back on BONUSES
 		}
 		break;
 
@@ -673,12 +702,12 @@ bool ASpinGameMode::IsShowingLevelBanner() const
 
 float ASpinGameMode::GetJamProgress() const
 {
-	return FMath::Clamp(static_cast<float>(JamPresses) / FMath::Max(1, JamPressesRequired), 0.f, 1.f);
+	return FMath::Clamp(static_cast<float>(JamPresses) / GetRunJamPressesRequired(), 0.f, 1.f);
 }
 
 float ASpinGameMode::GetJamTimeFraction() const
 {
-	return FMath::Clamp(1.f - JamTimer / FMath::Max(0.01f, JamTimeLimit), 0.f, 1.f);
+	return FMath::Clamp(1.f - JamTimer / FMath::Max(0.01f, GetRunJamTimeLimit()), 0.f, 1.f);
 }
 
 float ASpinGameMode::GetHitPulse() const
@@ -794,6 +823,11 @@ void ASpinGameMode::RecordRun()
 	Run.Hits = Hits;
 	Run.Date = FDateTime::Now();
 	Run.Modifiers = RunModifiers;
+	Run.Bonuses = RunBonuses;
+
+	// What was unlocked before this run, to tell what it unlocked.
+	const int32 OldUnlocked = GetUnlockedBonuses();
+	const int32 OldSlots = GetBonusSlots();
 
 	// Daily runs only compete with that day's daily runs. One that ran past midnight is
 	// yesterday's challenge, and yesterday's board is already gone - so it isn't recorded.
@@ -808,6 +842,34 @@ void ASpinGameMode::RecordRun()
 	{
 		SaveData->AddRun(Run, LeaderboardSize, LastRunLevelRank, LastRunScoreRank);
 	}
+
+	// Lifetime totals count every Endless run, daily ones included (AddRun already counted a
+	// normal run as played).
+	const int32 ProfileIndex = SaveData->FindProfile(Run.PlayerName);
+	if (SaveData->Profiles.IsValidIndex(ProfileIndex))
+	{
+		FSpinProfile& Profile = SaveData->Profiles[ProfileIndex];
+		Profile.ObstaclesCleared += ObstaclesCleared;
+		Profile.JamsFixed += JamsFixed;
+		if (bDailyRun)
+		{
+			++Profile.RunsPlayed;
+		}
+	}
+
+	const int32 Gained = GetUnlockedBonuses() & ~OldUnlocked;
+	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
+	{
+		if (Gained & (1 << i))
+		{
+			NewUnlocks.Add(GetBonusInfo(static_cast<ESpinBonus>(i)).Name);
+		}
+	}
+	for (int32 Slot = OldSlots + 1; Slot <= GetBonusSlots(); ++Slot)
+	{
+		NewUnlocks.Add(FString::Printf(TEXT("BONUS SLOT %d"), Slot));
+	}
+
 	WriteSaveData();
 }
 
@@ -897,7 +959,12 @@ int32 ASpinGameMode::GetRunMaxLives() const
 
 int32 ASpinGameMode::GetRunMaxMissLives() const
 {
-	return HasModifier(ESpinModifier::OneLife) ? 1 : MaxMissLives;
+	// ONE LIFE means one: it wins over EXTRA MISSES.
+	if (HasModifier(ESpinModifier::OneLife))
+	{
+		return 1;
+	}
+	return MaxMissLives + (HasBonus(ESpinBonus::ExtraMisses) ? 2 : 0);
 }
 
 float ASpinGameMode::GetRunStartSpeed() const
@@ -907,7 +974,7 @@ float ASpinGameMode::GetRunStartSpeed() const
 
 float ASpinGameMode::GetRunStartZoneHalfWidth() const
 {
-	return StartZoneHalfWidth * (HasModifier(ESpinModifier::TinyZones) ? 0.7f : 1.f);
+	return StartZoneHalfWidth * (HasModifier(ESpinModifier::TinyZones) ? 0.7f : 1.f) * (HasBonus(ESpinBonus::WideOpen) ? 1.15f : 1.f);
 }
 
 float ASpinGameMode::GetRunMinZoneHalfWidth() const
@@ -928,6 +995,117 @@ int32 ASpinGameMode::GetRunJamStartLevel() const
 float ASpinGameMode::GetRunJamChance() const
 {
 	return FMath::Min(1.f, JamChance * (HasModifier(ESpinModifier::EarlyJams) ? 1.5f : 1.f));
+}
+
+int32 ASpinGameMode::GetRunJamPressesRequired() const
+{
+	return FMath::Max(1, JamPressesRequired - (HasBonus(ESpinBonus::SteadyHands) ? 2 : 0));
+}
+
+float ASpinGameMode::GetRunJamTimeLimit() const
+{
+	return JamTimeLimit * (HasBonus(ESpinBonus::SteadyHands) ? 1.5f : 1.f);
+}
+
+float ASpinGameMode::GetRunInvincibilityDuration() const
+{
+	return InvincibilityDuration + (HasBonus(ESpinBonus::Breather) ? 2.f : 0.f);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bonuses
+// ---------------------------------------------------------------------------------------------
+
+const FSpinBonusInfo& ASpinGameMode::GetBonusInfo(ESpinBonus Bonus)
+{
+	// Effects live in the GetRun* functions; keep the descriptions in step with them.
+	static const FSpinBonusInfo Infos[] =
+	{
+		{ TEXT("WIDE OPEN"),    TEXT("Target zones start 15% wider."),                         TEXT("Reach level 10"),     ESpinBonusStat::BestLevel,        10 },
+		{ TEXT("EXTRA MISSES"), TEXT("Two more miss lives: five in all."),                     TEXT("Reach level 15"),     ESpinBonusStat::BestLevel,        15 },
+		{ TEXT("SECOND WIND"),  TEXT("Your first obstacle hit each run doesn't cost a life."), TEXT("Clear 50 obstacles"), ESpinBonusStat::ObstaclesCleared, 50 },
+		{ TEXT("STEADY HANDS"), TEXT("Jams take 2 fewer presses, with half again the time."),  TEXT("Fix 25 jams"),        ESpinBonusStat::JamsFixed,        25 },
+		{ TEXT("BREATHER"),     TEXT("Invincibility after a miss lasts 2 seconds longer."),    TEXT("Play 25 runs"),       ESpinBonusStat::RunsPlayed,       25 },
+	};
+	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinBonus::Count), "One entry per bonus");
+	return Infos[FMath::Clamp(static_cast<int32>(Bonus), 0, static_cast<int32>(ESpinBonus::Count) - 1)];
+}
+
+FString ASpinGameMode::GetBonusNames(int32 Mask)
+{
+	TArray<FString> Names;
+	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
+	{
+		if (Mask & (1 << i))
+		{
+			Names.Add(GetBonusInfo(static_cast<ESpinBonus>(i)).Name);
+		}
+	}
+	return FString::Join(Names, TEXT(" + "));
+}
+
+void ASpinGameMode::GetBonusProgress(ESpinBonus Bonus, int32& OutCurrent, int32& OutTarget) const
+{
+	const FSpinBonusInfo& Info = GetBonusInfo(Bonus);
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	OutTarget = Info.Target;
+	OutCurrent = 0;
+	if (!Profile)
+	{
+		return;
+	}
+
+	switch (Info.Stat)
+	{
+	case ESpinBonusStat::BestLevel:        OutCurrent = Profile->BestLevel; break;
+	case ESpinBonusStat::ObstaclesCleared: OutCurrent = Profile->ObstaclesCleared; break;
+	case ESpinBonusStat::JamsFixed:        OutCurrent = Profile->JamsFixed; break;
+	case ESpinBonusStat::RunsPlayed:       OutCurrent = Profile->RunsPlayed; break;
+	}
+}
+
+bool ASpinGameMode::IsBonusUnlocked(ESpinBonus Bonus) const
+{
+	int32 Current = 0, Target = 0;
+	GetBonusProgress(Bonus, Current, Target);
+	return Current >= Target;
+}
+
+int32 ASpinGameMode::GetUnlockedBonuses() const
+{
+	int32 Mask = 0;
+	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
+	{
+		if (IsBonusUnlocked(static_cast<ESpinBonus>(i)))
+		{
+			Mask |= 1 << i;
+		}
+	}
+	return Mask;
+}
+
+int32 ASpinGameMode::GetBonusSlots() const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	const int32 Best = Profile ? Profile->BestLevel : 0;
+	return 1 + (Best >= SecondSlotLevel ? 1 : 0) + (Best >= ThirdSlotLevel ? 1 : 0);
+}
+
+int32 ASpinGameMode::GetNextBonusSlotLevel() const
+{
+	const int32 Slots = GetBonusSlots();
+	return Slots == 1 ? SecondSlotLevel : Slots == 2 ? ThirdSlotLevel : 0;
+}
+
+int32 ASpinGameMode::GetEquippedBonuses() const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	return Profile ? Profile->EquippedBonuses & GetUnlockedBonuses() : 0;
+}
+
+bool ASpinGameMode::HasBonus(ESpinBonus Bonus) const
+{
+	return (RunBonuses & (1 << static_cast<int32>(Bonus))) != 0;
 }
 
 void ASpinGameMode::WriteSaveData()
@@ -1048,6 +1226,91 @@ void ASpinGameMode::CancelName()
 void ASpinGameMode::OpenModifiers()
 {
 	State = ESpinState::ModifierSelect;
+	MenuFocus = GetFocusRowCount(); // START
+}
+
+void ASpinGameMode::OpenBonuses()
+{
+	State = ESpinState::BonusSelect;
+	MenuFocus = GetFocusRowCount(); // START
+}
+
+int32 ASpinGameMode::GetFocusRowCount() const
+{
+	switch (State)
+	{
+	case ESpinState::ModifierSelect: return static_cast<int32>(ESpinModifier::Count);
+	case ESpinState::BonusSelect:    return static_cast<int32>(ESpinBonus::Count);
+	default:                         return 0;
+	}
+}
+
+int32 ASpinGameMode::GetFocusButtonCount() const
+{
+	switch (State)
+	{
+	case ESpinState::ModifierSelect: return 3; // START, BONUSES, BACK
+	case ESpinState::BonusSelect:    return 2; // START, BACK
+	default:                         return 0;
+	}
+}
+
+void ASpinGameMode::HandleMenuNav(int32 DX, int32 DY)
+{
+	const int32 Rows = GetFocusRowCount();
+	const int32 Buttons = GetFocusButtonCount();
+	if (Buttons == 0)
+	{
+		return;
+	}
+
+	if (MenuFocus < Rows)
+	{
+		// Up and down through the rows; down from the last one lands on START.
+		MenuFocus = FMath::Clamp(MenuFocus + DY, 0, Rows);
+	}
+	else if (DY < 0 && Rows > 0)
+	{
+		MenuFocus = Rows - 1;
+	}
+	else
+	{
+		MenuFocus = Rows + FMath::Clamp(MenuFocus - Rows + DX, 0, Buttons - 1);
+	}
+}
+
+void ASpinGameMode::ActivateMenuFocus()
+{
+	const int32 Rows = GetFocusRowCount();
+	if (MenuFocus < Rows)
+	{
+		HandleMenuAction(State == ESpinState::ModifierSelect ? EMenuAction::ToggleModifier : EMenuAction::ToggleBonus, MenuFocus);
+		return;
+	}
+
+	// Same order as the buttons are drawn, left to right.
+	static const EMenuAction ModifierButtons[] = { EMenuAction::StartEndless, EMenuAction::OpenBonuses, EMenuAction::Back };
+	static const EMenuAction BonusButtons[] = { EMenuAction::StartEndless, EMenuAction::Back };
+	const int32 Button = MenuFocus - Rows;
+	if (State == ESpinState::ModifierSelect && Button < UE_ARRAY_COUNT(ModifierButtons))
+	{
+		HandleMenuAction(ModifierButtons[Button]);
+	}
+	else if (State == ESpinState::BonusSelect && Button < UE_ARRAY_COUNT(BonusButtons))
+	{
+		HandleMenuAction(BonusButtons[Button]);
+	}
+}
+
+void ASpinGameMode::HandleStartButton()
+{
+	// On the screens right before a run, Start starts it; during a run it pauses.
+	if (State == ESpinState::ModifierSelect || State == ESpinState::BonusSelect)
+	{
+		StartGame();
+		return;
+	}
+	TogglePauseMenu();
 }
 
 void ASpinGameMode::StartGame(bool bDaily)
@@ -1062,6 +1325,10 @@ void ASpinGameMode::StartGame(bool bDaily)
 	RunDayKey = GetTodayKey();
 	RunModifiers = bDaily ? GetDailyModifiers() : SelectedModifiers;
 	RunPointsMultiplier = GetModifiersMultiplier(RunModifiers);
+	// Everyone plays the daily on the same terms, so no bonuses there.
+	RunBonuses = bDaily ? 0 : GetEquippedBonuses();
+	bSecondWindUsed = false;
+	NewUnlocks.Reset();
 	RunSeed = bDaily ? static_cast<int32>(HashCombine(static_cast<uint32>(RunDayKey), 0x5A17u)) : FMath::Rand();
 	RunRandom.Initialize(RunSeed);
 
@@ -1078,6 +1345,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	PointsLostToLift = 0;
 	ObstaclesHit = 0;
 	ObstaclesCleared = 0;
+	JamsFixed = 0;
 
 	// What this run is chasing (the player's own bests), and whether they've earned a quicker opening.
 	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
@@ -1115,7 +1383,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	// A few seconds of invincibility (with the big countdown) to get oriented before anything can
 	// go wrong, same as resuming after a mistake.
 	bInvincible = true;
-	InvincibleTimeRemaining = InvincibilityDuration;
+	InvincibleTimeRemaining = GetRunInvincibilityDuration();
 	InvincibilityEndTime = -1000.f;
 	LastMistake = ESpinMistake::None;
 	bHandBroke = false;
@@ -1135,10 +1403,11 @@ void ASpinGameMode::ContinueFromTutorial()
 
 	StartGame();
 
-	// A plain run - no modifiers or fast start, whatever is picked on the modifier screen.
+	// A plain run - no modifiers, bonuses or fast start, whatever is picked on the modifier screen.
 	bRunFromTutorial = true;
 	RunModifiers = 0;
 	RunPointsMultiplier = 1.f;
+	RunBonuses = 0;
 	bFastStart = false;
 	Lives = GetRunMaxLives();
 	MissLives = GetRunMaxMissLives();
@@ -1337,10 +1606,22 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 		++ObstaclesHit;
 	}
 
+	// SECOND WIND: the run's first obstacle hit is still a mistake (the combo is gone), but it's
+	// free - no life lost.
+	const bool bSecondWind = Mistake == ESpinMistake::HitObstacle && HasBonus(ESpinBonus::SecondWind) && !bSecondWindUsed;
+	if (bSecondWind)
+	{
+		bSecondWindUsed = true;
+	}
+
 	// Obstacle hits spend the regenerating "Lives" pool; everything else spends the
 	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise play
 	// carries straight on at the current level/score.
-	if (Mistake == ESpinMistake::HitObstacle)
+	if (bSecondWind)
+	{
+		// Nothing to spend.
+	}
+	else if (Mistake == ESpinMistake::HitObstacle)
 	{
 		Lives = FMath::Max(0, Lives - 1);
 		if (GetWorld())
@@ -1384,7 +1665,7 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 		// No pause: straight into the invincibility countdown to get back in rhythm. Obstacle hits
 		// skip this - the obstacle is cleared below and play simply carries on.
 		bInvincible = true;
-		InvincibleTimeRemaining = InvincibilityDuration;
+		InvincibleTimeRemaining = GetRunInvincibilityDuration();
 		InvincibilityEndTime = -1000.f;
 	}
 
@@ -1392,7 +1673,7 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 	{
 	case ESpinMistake::MissedZone:  ShowNotice(TEXT("You missed the zone!")); break;
 	case ESpinMistake::WrongButton: ShowNotice(TEXT("Wrong button, or too early!")); break;
-	case ESpinMistake::HitObstacle: ShowNotice(TEXT("You hit an obstacle!")); break;
+	case ESpinMistake::HitObstacle: ShowNotice(bSecondWind ? TEXT("SECOND WIND - that hit was free!") : TEXT("You hit an obstacle!")); break;
 	case ESpinMistake::HandBroke:   ShowNotice(TEXT("The hand broke free!")); break;
 	default: break;
 	}
@@ -1440,6 +1721,7 @@ void ASpinGameMode::StartTutorial()
 	bDailyRun = false;
 	RunModifiers = 0;
 	RunPointsMultiplier = 1.f;
+	RunBonuses = 0;
 	RunRandom.Initialize(FMath::Rand());
 	Hits = 0;
 	Points = 0;
@@ -1741,6 +2023,11 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		{
 			OpenModeSelect();
 		}
+		else if (State == ESpinState::BonusSelect)
+		{
+			OpenModifiers();
+			MenuFocus = GetFocusRowCount() + 1; // back on BONUSES
+		}
 		else if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu || State == ESpinState::Leaderboard
 			|| State == ESpinState::ProfileSelect)
 		{
@@ -1756,9 +2043,36 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::StartEndless:
-		if (State == ESpinState::ModifierSelect)
+		if (State == ESpinState::ModifierSelect || State == ESpinState::BonusSelect)
 		{
 			StartGame();
+		}
+		break;
+
+	case EMenuAction::OpenBonuses:
+		if (State == ESpinState::ModifierSelect)
+		{
+			OpenBonuses();
+		}
+		break;
+
+	case EMenuAction::ToggleBonus:
+		if (State == ESpinState::BonusSelect && SaveData && SaveData->Profiles.IsValidIndex(SaveData->ActiveProfile)
+			&& Index >= 0 && Index < static_cast<int32>(ESpinBonus::Count) && IsBonusUnlocked(static_cast<ESpinBonus>(Index)))
+		{
+			// Switching one off always works; switching one on needs a free slot.
+			FSpinProfile& Profile = SaveData->Profiles[SaveData->ActiveProfile];
+			const int32 Bit = 1 << Index;
+			const int32 Equipped = GetEquippedBonuses();
+			if (Equipped & Bit)
+			{
+				Profile.EquippedBonuses = Equipped & ~Bit;
+			}
+			else if (FMath::CountBits(static_cast<uint64>(Equipped)) < GetBonusSlots())
+			{
+				Profile.EquippedBonuses = Equipped | Bit;
+			}
+			WriteSaveData();
 		}
 		break;
 
@@ -1846,6 +2160,44 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		if (IsGameOverMenuReady())
 		{
 			QuitGame();
+		}
+		break;
+
+	case EMenuAction::ResumeGame:
+		if (IsPauseMenuOpen())
+		{
+			TogglePauseMenu();
+		}
+		break;
+
+	case EMenuAction::RestartRun:
+		if (IsPauseMenuOpen())
+		{
+			UGameplayStatics::SetGamePaused(this, false);
+			// Clear what the abandoned run left on the dial before the new one starts.
+			bInvincible = false;
+			InvincibilityEndTime = -1000.f;
+			if (Clock)
+			{
+				Clock->RetireObstacles();
+				Clock->SetLiftHeld(false, false);
+			}
+			if (IsTutorial())
+			{
+				StartTutorial();
+			}
+			else
+			{
+				StartGame(bDailyRun);
+			}
+		}
+		break;
+
+	case EMenuAction::QuitRunToMenu:
+		if (IsPauseMenuOpen())
+		{
+			UGameplayStatics::SetGamePaused(this, false);
+			ReturnToTitle();
 		}
 		break;
 
@@ -1982,6 +2334,39 @@ FString ASpinGameMode::GetRepairKey() const
 	}
 }
 
+FString ASpinGameMode::GetPauseKey() const
+{
+	switch (InputStyle)
+	{
+	case ESpinInputStyle::Xbox:        return TEXT("MENU");
+	case ESpinInputStyle::PlayStation: return TEXT("OPTIONS");
+	default:                           return TEXT("P");
+	}
+}
+
+void ASpinGameMode::TogglePauseMenu()
+{
+	// Only a run in motion can be paused - the intro screens already wait for the player.
+	if (State != ESpinState::Playing)
+	{
+		return;
+	}
+
+	const bool bPause = !IsPauseMenuOpen();
+	if (bPause && Clock)
+	{
+		// Drop the hand: the lift button's release won't be seen while paused, so a held lift
+		// would otherwise still be up (and costing points) after resuming.
+		Clock->SetLiftHeld(false, false);
+	}
+	UGameplayStatics::SetGamePaused(this, bPause);
+}
+
+bool ASpinGameMode::IsPauseMenuOpen() const
+{
+	return State == ESpinState::Playing && UGameplayStatics::IsGamePaused(this);
+}
+
 FString ASpinGameMode::ExpandKeys(const FString& Text) const
 {
 	FString Result = Text.Replace(TEXT("{LIFT}"), *GetLiftKey(false));
@@ -2047,7 +2432,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 	}
 
 	// Jammed: out of time?
-	if (JamTimer >= JamTimeLimit)
+	if (JamTimer >= GetRunJamTimeLimit())
 	{
 		if (IsTutorial())
 		{
@@ -2068,7 +2453,7 @@ void ASpinGameMode::RegisterJamPress()
 	++JamPresses;
 	Shake(0.06f);
 
-	if (JamPresses >= JamPressesRequired)
+	if (JamPresses >= GetRunJamPressesRequired())
 	{
 		FixJam();
 	}
@@ -2076,6 +2461,10 @@ void ASpinGameMode::RegisterJamPress()
 
 void ASpinGameMode::FixJam()
 {
+	if (!IsTutorial())
+	{
+		++JamsFixed;
+	}
 	JamPhase = EJamPhase::None;
 	JamTimer = 0.f;
 	JamPresses = 0;

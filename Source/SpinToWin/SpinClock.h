@@ -171,6 +171,15 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
 	float FillLightHitPulseBoost = 1.5f;
 
+	/** During invincibility the dial's glow (zone, grade lines, rings) and the fill light dim to
+	 *  this fraction and gently breathe, so it's obvious nothing counts yet. The hand stays bright. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon", meta = (ClampMin = "0", ClampMax = "1"))
+	float InvincibleBrightness = 0.4f;
+
+	/** Seconds to dim down when invincibility starts, and to brighten back up when it ends. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon", meta = (ClampMin = "0.01"))
+	float InvincibleFadeTime = 0.3f;
+
 	// ---------------- Lift tuning ----------------
 
 	/** How high the hand rises while the lift button is held (world units). Must be above ObstacleHeight. */
@@ -364,6 +373,8 @@ private:
 	float LiftTravelDeg = 0.f;
 	float PrevHandAngle = 0.f;
 	float ShakeAmount = 0.f;
+	/** 0 = full brightness, 1 = fully dimmed for invincibility (eased, see InvincibleFadeTime). */
+	float InvincibleDim = 0.f;
 	float LastZoneCenter = -1000.f;
 	float LastZoneHalfWidth = -1000.f;
 	bool bZonesVisible = true;

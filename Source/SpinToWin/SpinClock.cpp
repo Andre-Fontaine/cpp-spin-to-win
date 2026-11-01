@@ -327,6 +327,8 @@ void ASpinClock::Tick(float DeltaSeconds)
 		HandPivot->SetRelativeRotation(HandRotation);
 		HandPivot->SetRelativeLocation(FVector(0.f, 0.f, HandLift));
 
+		InvincibleDim = FMath::FInterpConstantTo(InvincibleDim, GM->bInvincible ? 1.f : 0.f, DeltaSeconds, 1.f / InvincibleFadeTime);
+
 		UpdateZone(*GM);
 		UpdateColors(*GM);
 	}
@@ -517,15 +519,25 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	const bool bActive = GM.State == ESpinState::Playing && GM.IsHandInZone();
 	const FLinearColor ZoneColor = bActive ? (ZoneBase + (FLinearColor::White - ZoneBase) * 0.45f) : ZoneBase;
 
+	// Invincibility: everything but the hand dims and slowly breathes until play is live again.
+	const float Breath = 0.1f * FMath::Sin(GetWorld()->GetTimeSeconds() * 4.f);
+	const float Dim = FMath::Lerp(1.f, InvincibleBrightness + Breath, InvincibleDim);
+
 	if (ZoneMID)
 	{
-		ZoneMID->SetVectorParameterValue(ColorParam, ZoneColor);
+		ZoneMID->SetVectorParameterValue(ColorParam, ZoneColor * Dim);
+	}
+
+	if (PerfectMarkMID && GoodMarkMID)
+	{
+		PerfectMarkMID->SetVectorParameterValue(ColorParam, PerfectMarkColor * Dim);
+		GoodMarkMID->SetVectorParameterValue(ColorParam, GoodMarkColor * Dim);
 	}
 
 	// Successful hits flare the rings and the fill light, then fade back (the city does the same,
 	// see ASpinCityFX).
 	const float Pulse = GM.GetHitPulse();
-	const float RingGlow = 1.f + RingHitPulseBoost * Pulse;
+	const float RingGlow = (1.f + RingHitPulseBoost * Pulse) * Dim;
 
 	if (OuterRingMID)
 	{
@@ -540,7 +552,7 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 
 	if (FillLight)
 	{
-		FillLight->SetIntensity(FillLightIntensity * (1.f + FillLightHitPulseBoost * Pulse));
+		FillLight->SetIntensity(FillLightIntensity * (1.f + FillLightHitPulseBoost * Pulse) * Dim);
 	}
 
 	if (HandMID)

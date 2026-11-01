@@ -13,6 +13,8 @@ A clock-style hand sweeps around a dial. Press the right button while the hand i
 | A / Gamepad X (Xbox) or Square (PlayStation) | Hit the third zone (unlocks at level 6), Daily on mode select |
 | Hold Left Click / Right Trigger | Raise the hand over an obstacle (costs points while up, drops after one full turn) |
 | Space / Gamepad Y (Xbox) or Triangle (PlayStation) | Mash to repair a jammed hand (does nothing the rest of the time) |
+| P / Gamepad Menu (Xbox) or Options (PlayStation) | Pause or resume a run; start the run from the modifier and bonus screens |
+| Arrow keys / D-pad / Left stick | Move the highlight on the modifier and bonus screens (W / Enter / A or X selects) |
 | Mouse | Click buttons on the main menu, mode select, settings, and pause screens |
 
 On-screen button prompts follow whichever device you used last (keyboard or gamepad).
@@ -42,6 +44,8 @@ Early prototype.
 - [x] Run modifiers with score multipliers
 - [x] Daily challenge with its own board
 - [x] End-of-run breakdown (longest combo, points lost to lifting, obstacles hit)
+- [x] Pause menu (resume, restart, main menu)
+- [x] Unlockable bonuses earned through play, equipped into slots that open at levels 25 and 40; runs that use them are marked on the leaderboard
 - [ ] Online leaderboard
 
 ## About this repo

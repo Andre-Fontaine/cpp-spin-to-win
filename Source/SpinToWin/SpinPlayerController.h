@@ -13,9 +13,11 @@
  *   Hit button 2: A / Gamepad X (Square)
  *   Lift (hold):  Left Mouse Button / Gamepad Right Trigger (R2)
  *   Repair:       Space / Gamepad Y (Triangle) - mashes a jammed hand free
+ *   Pause:        P / Gamepad Start (Xbox Menu, PlayStation Options) - starts the run on the modifier and bonus screens
+ *   Menu move:    Arrow keys / D-pad / left stick, on the modifier and bonus screens
  *
  * The same Left Mouse Button also drives the menus: on the menu screens (main menu, mode select,
- * settings, leaderboard, profiles, name entry, game over) a click is tested against the HUD's clickable regions instead of being
+ * settings, leaderboard, profiles, name entry, game over, pause) a click is tested against the HUD's clickable regions instead of being
  * treated as a lift. The mouse cursor is shown automatically whenever one of those screens is up.
  */
 UCLASS()
@@ -40,6 +42,13 @@ private:
 	void OnLiftPressed();
 	void OnLiftReleased();
 	void OnRepair();
+	void OnPause();
+	void OnNavUp();
+	void OnNavDown();
+	void OnNavLeft();
+	void OnNavRight();
+	void Navigate(int32 DX, int32 DY);
+	void OnMenuConfirm();
 	void PressButton(int32 ButtonIndex);
 	void SetLift(bool bHeld);
 

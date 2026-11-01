@@ -110,6 +110,9 @@ private:
 	void DrawMenuButton(float X, float Y, float W, float H, const FString& Label, EMenuAction Action,
 		const FLinearColor& Accent, const FString& KeyHint = FString(), bool bEnabled = true, int32 Index = INDEX_NONE);
 
+	/** The leaderboard's mark for a run that used bonuses: a small green "+" box, left edge at X. */
+	void DrawBonusBadge(float X, float CenterY);
+
 	/** Full-screen dimming behind a menu or pause screen. */
 	void DrawBackdrop(float Opacity = 0.8f);
 
@@ -159,11 +162,20 @@ private:
 	void DrawMainMenu(const ASpinGameMode& GM);
 	void DrawModeSelect(const ASpinGameMode& GM);
 	void DrawModifierSelect(const ASpinGameMode& GM);
+	void DrawBonusSelect(const ASpinGameMode& GM);
+
+	/** Pulsing outline around the item the controller has highlighted (ASpinGameMode::MenuFocus). */
+	void DrawFocusRing(float X, float Y, float W, float H);
+
+	/** "D-PAD move   A select   MENU start run", under the modifier and bonus screens. */
+	void DrawNavHint(const ASpinGameMode& GM, float CenterX, float Y);
 	void DrawSettings(const ASpinGameMode& GM);
 	void DrawLeaderboard(const ASpinGameMode& GM);
 	void DrawProfileSelect(const ASpinGameMode& GM);
 	void DrawNameEntry(const ASpinGameMode& GM);
 	void DrawGameOver(const ASpinGameMode& GM);
+	/** Drawn over the frozen run HUD while the game is paused. */
+	void DrawPauseMenu(const ASpinGameMode& GM);
 
 	/** The explanation screens (new mechanic unlocks, tutorial stages): eyebrow tag, title, lines,
 	 *  and what to press to continue. */

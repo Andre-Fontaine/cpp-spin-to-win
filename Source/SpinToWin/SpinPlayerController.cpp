@@ -34,11 +34,17 @@ bool ASpinPlayerController::IsInMenuState() const
 		return false;
 	}
 
+	if (GM->IsPauseMenuOpen())
+	{
+		return true;
+	}
+
 	switch (GM->State)
 	{
 	case ESpinState::WaitingToStart:
 	case ESpinState::ModeSelect:
 	case ESpinState::ModifierSelect:
+	case ESpinState::BonusSelect:
 	case ESpinState::SettingsMenu:
 	case ESpinState::Leaderboard:
 	case ESpinState::ProfileSelect:
@@ -169,20 +175,46 @@ void ASpinPlayerController::SetupInputComponent()
 		return;
 	}
 
+	// The hit buttons and the left click also drive the pause menu, so they have to keep working
+	// while the game is paused. Everything else is ignored until it's resumed.
+
 	// Hit button 0
-	InputComponent->BindKey(EKeys::W, IE_Pressed, this, &ASpinPlayerController::OnButton0);
-	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &ASpinPlayerController::OnButton0);
+	InputComponent->BindKey(EKeys::W, IE_Pressed, this, &ASpinPlayerController::OnButton0).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &ASpinPlayerController::OnButton0).bExecuteWhenPaused = true;
 
 	// Hit button 1
-	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &ASpinPlayerController::OnButton1);
-	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &ASpinPlayerController::OnButton1);
+	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &ASpinPlayerController::OnButton1).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &ASpinPlayerController::OnButton1).bExecuteWhenPaused = true;
 
 	// Hit button 2
-	InputComponent->BindKey(EKeys::A, IE_Pressed, this, &ASpinPlayerController::OnButton2);
-	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &ASpinPlayerController::OnButton2);
+	InputComponent->BindKey(EKeys::A, IE_Pressed, this, &ASpinPlayerController::OnButton2).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Left, IE_Pressed, this, &ASpinPlayerController::OnButton2).bExecuteWhenPaused = true;
+
+	// Pause: P / Start (Xbox Menu, PlayStation Options) opens and closes the pause menu.
+	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ASpinPlayerController::OnPause).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::Gamepad_Special_Right, IE_Pressed, this, &ASpinPlayerController::OnPause).bExecuteWhenPaused = true;
+
+	// Menu navigation on the modifier and bonus screens (ignored everywhere else). Holding a key repeats.
+	for (const EInputEvent Event : { IE_Pressed, IE_Repeat })
+	{
+		InputComponent->BindKey(EKeys::Up, Event, this, &ASpinPlayerController::OnNavUp);
+		InputComponent->BindKey(EKeys::Down, Event, this, &ASpinPlayerController::OnNavDown);
+		InputComponent->BindKey(EKeys::Left, Event, this, &ASpinPlayerController::OnNavLeft);
+		InputComponent->BindKey(EKeys::Right, Event, this, &ASpinPlayerController::OnNavRight);
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, Event, this, &ASpinPlayerController::OnNavUp);
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Down, Event, this, &ASpinPlayerController::OnNavDown);
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Left, Event, this, &ASpinPlayerController::OnNavLeft);
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Right, Event, this, &ASpinPlayerController::OnNavRight);
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Up, Event, this, &ASpinPlayerController::OnNavUp);
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Down, Event, this, &ASpinPlayerController::OnNavDown);
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Left, Event, this, &ASpinPlayerController::OnNavLeft);
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Right, Event, this, &ASpinPlayerController::OnNavRight);
+	}
+	// Enter presses the highlighted item there too (W / A / Cross already do, as the first button).
+	InputComponent->BindKey(EKeys::Enter, IE_Pressed, this, &ASpinPlayerController::OnMenuConfirm);
 
 	// Lift: hold to keep the hand raised.
-	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ASpinPlayerController::OnLiftPressed);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ASpinPlayerController::OnLiftPressed).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ASpinPlayerController::OnLiftReleased);
 	InputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Pressed, this, &ASpinPlayerController::OnLiftPressed);
 	InputComponent->BindKey(EKeys::Gamepad_RightTrigger, IE_Released, this, &ASpinPlayerController::OnLiftReleased);
@@ -226,6 +258,37 @@ void ASpinPlayerController::OnRepair()
 	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
 	{
 		GM->HandleRepairPressed();
+	}
+}
+
+void ASpinPlayerController::OnPause()
+{
+	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	{
+		GM->HandleStartButton();
+	}
+}
+
+void ASpinPlayerController::OnNavUp()    { Navigate(0, -1); }
+void ASpinPlayerController::OnNavDown()  { Navigate(0, 1); }
+void ASpinPlayerController::OnNavLeft()  { Navigate(-1, 0); }
+void ASpinPlayerController::OnNavRight() { Navigate(1, 0); }
+
+void ASpinPlayerController::Navigate(int32 DX, int32 DY)
+{
+	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	{
+		GM->HandleMenuNav(DX, DY);
+	}
+}
+
+void ASpinPlayerController::OnMenuConfirm()
+{
+	// Only on the screens with a highlight - elsewhere Enter would land as a hit.
+	ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+	if (GM && (GM->State == ESpinState::ModifierSelect || GM->State == ESpinState::BonusSelect))
+	{
+		GM->HandleButtonPressed(0);
 	}
 }
 

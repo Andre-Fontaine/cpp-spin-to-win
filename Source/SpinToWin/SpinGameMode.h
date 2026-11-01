@@ -18,6 +18,8 @@ enum class ESpinState : uint8
 	ModeSelect,
 	/** ENDLESS was chosen: toggle run modifiers, then start. */
 	ModifierSelect,
+	/** BONUSES was chosen on the modifier screen: equip unlocked bonuses into slots. */
+	BonusSelect,
 	/** SETTINGS was chosen: graphics quality, resolution, and volume. */
 	SettingsMenu,
 	/** LEADERBOARD was chosen: the saved best runs, by level and by score. */
@@ -85,6 +87,10 @@ enum class EMenuAction : uint8
 	OpenModifiers,
 	/** Index = which ESpinModifier to switch on or off. */
 	ToggleModifier,
+	/** From the modifier screen: opens the bonus screen. */
+	OpenBonuses,
+	/** Index = which ESpinBonus to equip or unequip. */
+	ToggleBonus,
 	StartDaily,
 	QualityPrev,
 	QualityNext,
@@ -107,6 +113,12 @@ enum class EMenuAction : uint8
 	CancelDeleteProfile,
 	ConfirmName,
 	CancelName,
+	/** Pause menu: back into the run. */
+	ResumeGame,
+	/** Pause menu: start the same kind of run over. */
+	RestartRun,
+	/** Pause menu: abandon the run (it isn't recorded) and go to the main menu. */
+	QuitRunToMenu,
 };
 
 UENUM(BlueprintType)
@@ -134,6 +146,46 @@ enum class ESpinModifier : uint8
 	/** One obstacle life and one miss life: any mistake ends the run. */
 	OneLife,
 	Count UMETA(Hidden)
+};
+
+/** Perks unlocked through progression, which make an Endless run more forgiving. None of them
+ *  touches scoring, but runs that used any are marked on the leaderboard. A run can use as many
+ *  as the player has slots (see ASpinGameMode::GetBonusSlots), and none on the daily challenge.
+ *  Stored as bit flags (1 << value), like modifiers. */
+UENUM(BlueprintType)
+enum class ESpinBonus : uint8
+{
+	/** Target zones start wider. */
+	WideOpen,
+	/** More miss lives. */
+	ExtraMisses,
+	/** The first obstacle hit of the run doesn't cost a life. */
+	SecondWind,
+	/** Jams need fewer presses and give more time. */
+	SteadyHands,
+	/** Longer invincibility after a miss. */
+	Breather,
+	Count UMETA(Hidden)
+};
+
+/** What a bonus's unlock is measured by, on the player's profile. */
+enum class ESpinBonusStat : uint8
+{
+	BestLevel,
+	ObstaclesCleared,
+	JamsFixed,
+	RunsPlayed
+};
+
+/** Display info and unlock rule for one bonus, see ASpinGameMode::GetBonusInfo. */
+struct FSpinBonusInfo
+{
+	const TCHAR* Name;
+	const TCHAR* Description;
+	/** "Reach level 10", shown while it's locked. */
+	const TCHAR* Requirement;
+	ESpinBonusStat Stat;
+	int32 Target;
 };
 
 /** Display info and scoring for one modifier, see ASpinGameMode::GetModifierInfo. */
@@ -315,6 +367,9 @@ public:
 	/** The repair button's name on the input in use ("SPACE", "Y", ...). */
 	FString GetRepairKey() const;
 
+	/** The pause button's name on the input in use ("P", "MENU", "OPTIONS"). */
+	FString GetPauseKey() const;
+
 	/** Replaces button tokens in text meant for the screen with the names for the input in use:
 	 *  {0} {1} {2} = the buttons, {LIFT} = the lift, {REPAIR} = the repair button. Text that names buttons is written with these
 	 *  tokens so it always matches whatever the player is holding. */
@@ -407,6 +462,13 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "1"))
 	int32 MaxMultiplier = 5;
+
+	/** Best levels that open a second and a third bonus slot. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Bonuses", meta = (ClampMin = "1"))
+	int32 SecondSlotLevel = 25;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Bonuses", meta = (ClampMin = "1"))
+	int32 ThirdSlotLevel = 40;
 
 	/** How many runs each leaderboard keeps. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "1"))
@@ -626,6 +688,20 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float RunPointsMultiplier = 1.f;
 
+	/** The highlighted item on the modifier or bonus screen, for controller navigation: the rows
+	 *  first (0..N-1, one per modifier or bonus), then the buttons along the bottom, left to right
+	 *  (N = START). The first button activates it. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 MenuFocus = 0;
+
+	/** Bonuses in effect this run (bit mask of 1 << ESpinBonus). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 RunBonuses = 0;
+
+	/** What the last finished run unlocked (bonus names, new slots), for the game-over screen. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	TArray<FString> NewUnlocks;
+
 	/** The modifiers picked on the modifier screen for the next Endless run (saved). */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 SelectedModifiers = 0;
@@ -672,6 +748,10 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
 	int32 ObstaclesCleared = 0;
+
+	/** Jams repaired in time this run. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|Stats")
+	int32 JamsFixed = 0;
 
 	/** Which button (index into Prompts) the current zone requires. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -847,6 +927,34 @@ public:
 	int32 GetRunMaxLives() const;
 	int32 GetRunMaxMissLives() const;
 
+	/** Jam repair for this run - easier with STEADY HANDS. */
+	int32 GetRunJamPressesRequired() const;
+	float GetRunJamTimeLimit() const;
+
+	// ---------------- Bonuses ----------------
+
+	static const FSpinBonusInfo& GetBonusInfo(ESpinBonus Bonus);
+
+	/** "WIDE OPEN + BREATHER", or empty for none. */
+	static FString GetBonusNames(int32 Mask);
+
+	/** The active player's progress towards unlocking a bonus (Current can pass Target). */
+	void GetBonusProgress(ESpinBonus Bonus, int32& OutCurrent, int32& OutTarget) const;
+
+	bool IsBonusUnlocked(ESpinBonus Bonus) const;
+
+	/** How many bonuses the active player can have on at once (1, more at SecondSlotLevel / ThirdSlotLevel). */
+	int32 GetBonusSlots() const;
+
+	/** Best level that opens the next bonus slot, or 0 if they're all open. */
+	int32 GetNextBonusSlotLevel() const;
+
+	/** The bonuses the active player has switched on for their next Endless run (bit mask). */
+	int32 GetEquippedBonuses() const;
+
+	/** True if this bonus is in effect for the current run. */
+	bool HasBonus(ESpinBonus Bonus) const;
+
 	/** How many buttons are in play right now. */
 	int32 GetNumActiveButtons() const;
 
@@ -871,6 +979,19 @@ public:
 	/** True once the game-over menu has been up long enough (RestartDelay) to accept input. */
 	bool IsGameOverMenuReady() const;
 
+	/** The pause button: opens the pause menu during a run, or closes it again. Ignored anywhere else. */
+	void TogglePauseMenu();
+
+	/** Start / P: starts the run from the modifier and bonus screens, pauses during one. */
+	void HandleStartButton();
+
+	/** D-pad / stick / arrow keys on the modifier and bonus screens: moves MenuFocus (DY -1 = up). */
+	void HandleMenuNav(int32 DX, int32 DY);
+
+	/** True while a run is paused behind the pause menu. The whole world is paused (see
+	 *  UGameplayStatics::SetGamePaused), so the hand, timers and effects all freeze. */
+	bool IsPauseMenuOpen() const;
+
 	/** The in-world dial, spawned when play starts. */
 	ASpinClock* GetClock() const;
 
@@ -887,6 +1008,13 @@ private:
 	 *  without stopping or resetting the hand. */
 	void ContinueFromTutorial();
 	void OpenModifiers();
+	void OpenBonuses();
+
+	/** Controller navigation (see MenuFocus): how many rows and bottom buttons the current screen has,
+	 *  and pressing the highlighted one. */
+	int32 GetFocusRowCount() const;
+	int32 GetFocusButtonCount() const;
+	void ActivateMenuFocus();
 
 	/** Run tuning with this run's modifiers applied. */
 	float GetRunStartSpeed() const;
@@ -894,6 +1022,10 @@ private:
 	float GetRunMinZoneHalfWidth() const;
 	int32 GetRunJamStartLevel() const;
 	float GetRunJamChance() const;
+	float GetRunInvincibilityDuration() const;
+
+	/** The bonuses unlocked by the active player (bit mask), see IsBonusUnlocked. */
+	int32 GetUnlockedBonuses() const;
 	void OnHit();
 	void OnZoneMissed();
 	/** A life-costing mistake: spends a life from the right pool, then either ends the run or
@@ -974,6 +1106,9 @@ private:
 	/** This run carried on from the tutorial, which already taught jams: they can happen from the
 	 *  handoff level, and their explanation screen is skipped. */
 	bool bRunFromTutorial = false;
+
+	/** Second Wind has already saved a life this run. */
+	bool bSecondWindUsed = false;
 
 	/** Fraction of a point the lift has cost but not yet taken off the score. */
 	float LiftPointsDebt = 0.f;

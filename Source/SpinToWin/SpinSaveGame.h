@@ -34,6 +34,10 @@ struct FSpinRunRecord
 	/** Modifiers the run was played with (bit mask of 1 << ESpinModifier). */
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 Modifiers = 0;
+
+	/** Bonuses the run was played with (bit mask of 1 << ESpinBonus). The leaderboard marks these runs. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 Bonuses = 0;
 };
 
 /** One player. Their personal bests live here rather than being read off the shared boards, so
@@ -54,6 +58,17 @@ struct FSpinProfile
 
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 RunsPlayed = 0;
+
+	/** Lifetime totals over every Endless run (daily ones too), which unlock some bonuses. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 ObstaclesCleared = 0;
+
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 JamsFixed = 0;
+
+	/** Bonuses switched on for their next Endless run (bit mask of 1 << ESpinBonus). */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 EquippedBonuses = 0;
 };
 
 /**
