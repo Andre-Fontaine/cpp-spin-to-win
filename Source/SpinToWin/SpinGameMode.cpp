@@ -1007,6 +1007,11 @@ float ASpinGameMode::GetRunJamTimeLimit() const
 	return JamTimeLimit * (HasBonus(ESpinBonus::SteadyHands) ? 1.5f : 1.f);
 }
 
+float ASpinGameMode::GetRunJamSparkTime() const
+{
+	return JamSparkTime * (HasBonus(ESpinBonus::EarlyWarning) ? 1.5f : 1.f);
+}
+
 float ASpinGameMode::GetRunInvincibilityDuration() const
 {
 	return InvincibilityDuration + (HasBonus(ESpinBonus::Breather) ? 2.f : 0.f);
@@ -1026,6 +1031,7 @@ const FSpinBonusInfo& ASpinGameMode::GetBonusInfo(ESpinBonus Bonus)
 		{ TEXT("SECOND WIND"),  TEXT("Your first obstacle hit each run doesn't cost a life."), TEXT("Clear 50 obstacles"), ESpinBonusStat::ObstaclesCleared, 50 },
 		{ TEXT("STEADY HANDS"), TEXT("Jams take 2 fewer presses, with half again the time."),  TEXT("Fix 25 jams"),        ESpinBonusStat::JamsFixed,        25 },
 		{ TEXT("BREATHER"),     TEXT("Invincibility after a miss lasts 2 seconds longer."),    TEXT("Play 25 runs"),       ESpinBonusStat::RunsPlayed,       25 },
+		{ TEXT("EARLY WARNING"), TEXT("Jam sparks last 50% longer before the hand jams."),     TEXT("Fix 10 jams"),        ESpinBonusStat::JamsFixed,        10 },
 	};
 	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinBonus::Count), "One entry per bonus");
 	return Infos[FMath::Clamp(static_cast<int32>(Bonus), 0, static_cast<int32>(ESpinBonus::Count) - 1)];
@@ -2409,7 +2415,7 @@ void ASpinGameMode::UpdateJam(float DeltaSeconds)
 
 	if (JamPhase == EJamPhase::Sparking)
 	{
-		if (JamTimer >= JamSparkTime)
+		if (JamTimer >= GetRunJamSparkTime())
 		{
 			// The hand jams.
 			JamPhase = EJamPhase::Jammed;

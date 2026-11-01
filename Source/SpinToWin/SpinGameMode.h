@@ -165,6 +165,8 @@ enum class ESpinBonus : uint8
 	SteadyHands,
 	/** Longer invincibility after a miss. */
 	Breather,
+	/** Jam sparks last longer before the hand jams. (New bonuses go last: the values are saved as bits.) */
+	EarlyWarning,
 	Count UMETA(Hidden)
 };
 
@@ -930,6 +932,9 @@ public:
 	/** Jam repair for this run - easier with STEADY HANDS. */
 	int32 GetRunJamPressesRequired() const;
 	float GetRunJamTimeLimit() const;
+
+	/** Seconds of sparks before the hand jams this run - longer with EARLY WARNING. */
+	float GetRunJamSparkTime() const;
 
 	// ---------------- Bonuses ----------------
 

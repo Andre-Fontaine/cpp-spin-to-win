@@ -947,7 +947,7 @@ void ASpinHUD::DrawCallout(const ASpinGameMode& GM, float CenterX, float Y)
 	{
 		Title = TEXT("OVERHEATING!");
 		Color = FMath::Lerp(Orange, Gold, Pulse01(Now, 14.f));
-		Subs.Add({ FString::Printf(TEXT("The hand jams in %.1fs - get ready to mash %s"), FMath::Max(0.f, GM.JamSparkTime - GM.JamTimer), *RepairKey), TextMain });
+		Subs.Add({ FString::Printf(TEXT("The hand jams in %.1fs - get ready to mash %s"), FMath::Max(0.f, GM.GetRunJamSparkTime() - GM.JamTimer), *RepairKey), TextMain });
 	}
 	else if (GM.JamPhase == EJamPhase::Jammed)
 	{
