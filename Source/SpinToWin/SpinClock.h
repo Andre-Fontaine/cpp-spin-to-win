@@ -48,6 +48,9 @@ struct FObstacleState
 
 	/** True once the hand has fully passed this obstacle. */
 	bool bPassed = false;
+
+	/** A high post: it floats above the dial, so the hand passes under it - unless it's lifted. */
+	bool bHigh = false;
 };
 
 UCLASS()
@@ -80,7 +83,7 @@ public:
 	/** True while the lift is in effect: held from a valid press and not yet timed out. */
 	bool IsLiftActive() const;
 
-	/** True while an obstacle is out and the hand hasn't passed it yet, i.e. there's something to lift over. */
+	/** True while a (low) obstacle is out and the hand hasn't passed it yet, i.e. there's something to lift over. */
 	bool IsLiftAvailable() const;
 
 	/** True when the hand is lifted clearly off the dial (it turns cyan). Hitting zones works at any height. */
@@ -88,15 +91,17 @@ public:
 
 	// ---------------- Obstacles ----------------
 
-	/** Slide an obstacle in from the side so it comes to rest at this angle / radius on the dial. */
-	void SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg);
+	/** Slide an obstacle in from the side so it comes to rest at this angle / radius on the dial.
+	 *  A high one floats above the dial instead of standing on it (see FObstacleState::bHigh). */
+	void SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh = false);
 	// AheadDeg = how many degrees ahead of the hand (in its direction of travel) the obstacle is.
 
 	/** Slide every current obstacle back out of the dial. */
 	void RetireObstacles();
 
-	/** True if the hand, at the given angle and its current height, is touching an obstacle. */
-	bool IsHandHittingObstacle(float HandAngleDeg) const;
+	/** True if the hand, at the given angle and its current height, is touching an obstacle: a low
+	 *  one while not lifted clear of it, or a high one while lifted at all. bOutHigh says which. */
+	bool IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh = nullptr) const;
 
 	// ---------------- Jam ----------------
 
@@ -213,6 +218,20 @@ public:
 	float ObstacleHeight = 90.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	FLinearColor ObstacleColor = FLinearColor(0.95f, 0.3f, 0.1f);
+
+	/** High posts float this far above the dial (world units). Lifting the hand at all reaches
+	 *  them; a resting hand passes underneath. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	float HighObstacleBottom = 45.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	float HighObstacleHeight = 60.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	FLinearColor HighObstacleColor = FLinearColor(0.7f, 0.15f, 1.f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
 	float ObstacleSlideInTime = 0.4f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
@@ -300,6 +319,10 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleMeshes;
 
+	/** A dark disc on the dial under each high post, so it reads as floating over that spot. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleShadows;
+
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> SparkMeshes;
 
@@ -342,6 +365,15 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> ObstacleMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> HighObstacleMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> ShadowMID;
+
+	/** Where an obstacle's mesh sits: its centre height, standing on the dial or floating. */
+	float GetObstacleCenterZ(const FObstacleState& S) const;
 
 	TWeakObjectPtr<ASpinGameMode> GameMode;
 

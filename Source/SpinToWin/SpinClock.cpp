@@ -93,6 +93,9 @@ ASpinClock::ASpinClock()
 	for (int32 i = 0; i < NumObstacleSlots; ++i)
 	{
 		ObstacleMeshes.Add(MakeMesh(*FString::Printf(TEXT("Obstacle%d"), i), CylinderMesh, Root));
+		UStaticMeshComponent* Shadow = MakeMesh(*FString::Printf(TEXT("ObstacleShadow%d"), i), CylinderMesh, Root);
+		Shadow->SetCastShadow(false);
+		ObstacleShadows.Add(Shadow);
 	}
 	ObstacleStates.SetNum(NumObstacleSlots);
 
@@ -149,11 +152,17 @@ void ASpinClock::BuildVisuals()
 	Hand->SetRelativeScale3D(FVector(HandLength / 100.f, HandWidth / 100.f, HandHeight / 100.f));
 	Hand->SetRelativeLocation(FVector(HandLength * 0.5f, 0.f, 3.f + HandHeight * 0.5f));
 
-	// Obstacles: round posts, hidden until one is spawned.
+	// Obstacles: round posts, hidden until one is spawned (which also sets their height).
 	for (UStaticMeshComponent* Post : ObstacleMeshes)
 	{
 		Post->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, ObstacleHeight / 100.f));
 		Post->SetVisibility(false);
+	}
+	// High posts' shadows: a flat disc lying on the dial.
+	for (UStaticMeshComponent* Shadow : ObstacleShadows)
+	{
+		Shadow->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, 1.f / 100.f));
+		Shadow->SetVisibility(false);
 	}
 
 	// Sparks: tiny glowing blocks, hidden until needed.
@@ -217,11 +226,28 @@ void ASpinClock::BuildVisuals()
 		ObstacleMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
 		if (ObstacleMID)
 		{
-			ObstacleMID->SetVectorParameterValue(ColorParam, FLinearColor(0.95f, 0.3f, 0.1f));
+			ObstacleMID->SetVectorParameterValue(ColorParam, ObstacleColor);
 		}
 		for (UStaticMeshComponent* Post : ObstacleMeshes)
 		{
 			Post->SetMaterial(0, ObstacleMID);
+		}
+
+		HighObstacleMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+		if (HighObstacleMID)
+		{
+			HighObstacleMID->SetVectorParameterValue(ColorParam, HighObstacleColor);
+		}
+
+		// A dark tint of the high posts' colour.
+		ShadowMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+		if (ShadowMID)
+		{
+			ShadowMID->SetVectorParameterValue(ColorParam, HighObstacleColor * 0.12f);
+		}
+		for (UStaticMeshComponent* Shadow : ObstacleShadows)
+		{
+			Shadow->SetMaterial(0, ShadowMID);
 		}
 	}
 
@@ -613,13 +639,18 @@ bool ASpinClock::IsLiftAvailable() const
 	for (const FObstacleState& S : ObstacleStates)
 	{
 		const bool bOut = S.Phase == EObstaclePhase::SlidingIn || S.Phase == EObstaclePhase::Waiting;
-		if (bOut && !S.bPassed)
+		if (bOut && !S.bPassed && !S.bHigh)
 		{
 			return true;
 		}
 	}
 
 	return false;
+}
+
+float ASpinClock::GetObstacleCenterZ(const FObstacleState& S) const
+{
+	return S.bHigh ? HighObstacleBottom + HighObstacleHeight * 0.5f : ObstacleHeight * 0.5f;
 }
 
 void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM, float Moved)
@@ -641,12 +672,15 @@ void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM, float Moved)
 		if (S.RemainingDeg <= -S.PassMarginDeg)
 		{
 			S.bPassed = true; // the hand is fully beyond it
-			GM.OnObstacleCleared(); // it got over the obstacle, so the player earns a life back
+			if (!S.bHigh)
+			{
+				GM.OnObstacleCleared(); // it got over the post, which counts towards a life back (passing under a high one doesn't)
+			}
 		}
 	}
 }
 
-void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg)
+void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh)
 {
 	for (int32 i = 0; i < ObstacleStates.Num(); ++i)
 	{
@@ -675,10 +709,15 @@ void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float Ahead
 		S.RemainingDeg = AheadDeg;
 		S.PassMarginDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(Reach / FMath::Max(Rho, 1.f), 0.f, 1.f))) + 3.f;
 		S.bPassed = false;
+		S.bHigh = bHigh;
 
 		UStaticMeshComponent* Post = ObstacleMeshes[i];
 		Post->SetVisibility(true);
-		Post->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, ObstacleHeight * 0.5f));
+		Post->SetMaterial(0, bHigh ? HighObstacleMID.Get() : ObstacleMID.Get());
+		Post->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, (bHigh ? HighObstacleHeight : ObstacleHeight) / 100.f));
+		Post->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
+		ObstacleShadows[i]->SetVisibility(bHigh);
+		ObstacleShadows[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, 0.6f));
 		return;
 	}
 }
@@ -735,6 +774,7 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 			{
 				S.Phase = EObstaclePhase::Inactive;
 				ObstacleMeshes[i]->SetVisibility(false);
+				ObstacleShadows[i]->SetVisibility(false);
 			}
 			break;
 		}
@@ -743,17 +783,17 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 			break;
 		}
 
-		ObstacleMeshes[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, ObstacleHeight * 0.5f));
+		ObstacleMeshes[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
+		ObstacleShadows[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, 0.6f));
 	}
 }
 
-bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg) const
+bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh) const
 {
-	// A hand lifted above the obstacles passes over them.
-	if (HandLift >= ObstacleHeight)
-	{
-		return false;
-	}
+	// A hand lifted above the low posts passes over them; a hand whose top stays under the high
+	// posts passes beneath them (the hand sits 3 units up, see BuildVisuals).
+	const bool bClearsLow = HandLift >= ObstacleHeight;
+	const bool bClearsHigh = HandLift + 3.f + HandHeight <= HighObstacleBottom;
 
 	const float Rad = FMath::DegreesToRadians(HandAngleDeg);
 	const float CosA = FMath::Cos(Rad);
@@ -769,6 +809,10 @@ bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg) const
 		{
 			continue;
 		}
+		if (S.bHigh ? bClearsHigh : bClearsLow)
+		{
+			continue;
+		}
 
 		// Obstacle position in the hand's own frame: "Along" runs down the hand, "Across" is sideways.
 		const float Along = S.Current.X * CosA + S.Current.Y * SinA;
@@ -779,6 +823,10 @@ bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg) const
 		const float DX = Along - AlongOnHand;
 		if (DX * DX + Across * Across <= Reach * Reach)
 		{
+			if (bOutHigh)
+			{
+				*bOutHigh = S.bHigh;
+			}
 			return true;
 		}
 	}

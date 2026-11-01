@@ -166,9 +166,19 @@ void ASpinHUD::DrawHUD()
 			{
 				{ FString::Printf(TEXT("Hold %s to lift the hand over posts."), *GM->GetLiftKey(false)), Cyan },
 				{ TEXT("Lifting costs points - only lift when needed."), TextDim },
-				{ TEXT("Hit a post: -1 life. Clear one: +1 life."), FLinearColor(1.f, 0.65f, 0.65f) },
+				{ FString::Printf(TEXT("Hit a post: -1 life. Clear %d: +1 life."), GM->ObstaclesPerLife), FLinearColor(1.f, 0.65f, 0.65f) },
 			},
 			TEXT("Hold"), GM->GetLiftKey(), Cyan);
+		break;
+
+	case ESpinState::HighObstacleIntro:
+		DrawBriefing(TEXT("NEW HAZARD"), TEXT("HIGH POSTS"),
+			{
+				{ TEXT("Purple posts float above the dial."), Purple },
+				{ TEXT("Don't lift - the hand passes right under them."), TextMain },
+				{ TEXT("Lift into one: -1 life. They never give lives back."), FLinearColor(1.f, 0.65f, 0.65f) },
+			},
+			TEXT("Press"), KeyHintOf(*GM, 0), KeyColorOf(*GM, 0));
 		break;
 
 	case ESpinState::JamIntro:
@@ -188,7 +198,7 @@ void ASpinHUD::DrawHUD()
 	{
 		TArray<FSpinBriefLine> Lines;
 		Lines.Add({ TEXT("Mistakes count now."), TextMain });
-		Lines.Add({ FString::Printf(TEXT("LIVES (left): %d. Hit a post -1, clear one +1."), GM->GetRunMaxLives()), Red });
+		Lines.Add({ FString::Printf(TEXT("LIVES (left): %d. Hit a post -1, clear %d for +1."), GM->GetRunMaxLives(), GM->ObstaclesPerLife), Red });
 		Lines.Add({ FString::Printf(TEXT("MISSES (right): %d. Missed zone or wrong button -1."), GM->GetRunMaxMissLives()), Orange });
 		if (GM->MissRegenLevels > 0)
 		{
@@ -853,7 +863,10 @@ void ASpinHUD::DrawHealthColumns(const ASpinGameMode& GM)
 	// Left of the dial: obstacle lives. Right of it: miss lives.
 	if (bLives)
 	{
-		DrawColumn(DialLeft - RimGap - W, TEXT("LIVES"), GM.IsTutorial() ? TEXT("PRACTICE") : TEXT("+1 PER HOP"),
+		// How close the next life is: posts cleared out of the ObstaclesPerLife needed.
+		const FString LivesSub = GM.IsTutorial() ? FString(TEXT("PRACTICE"))
+			: FString::Printf(TEXT("%d/%d TO +1"), GM.ObstacleLifeProgress, GM.ObstaclesPerLife);
+		DrawColumn(DialLeft - RimGap - W, TEXT("LIVES"), *LivesSub,
 			GM.Lives, GM.GetRunMaxLives(), Red, GM.LifeLostTime, GM.LifeGainedTime);
 	}
 	if (bMisses)

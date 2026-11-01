@@ -45,6 +45,7 @@ Early prototype.
 - [x] Daily challenge with its own board
 - [x] End-of-run breakdown (longest combo, points lost to lifting, obstacles hit)
 - [x] Pause menu (resume, restart, main menu)
+- [x] High posts (from level 12): purple posts that float above the dial - pass under them, don't lift
 - [x] Unlockable bonuses earned through play, equipped into slots that open at levels 25 and 40; runs that use them are marked on the leaderboard
 - [ ] Online leaderboard
 

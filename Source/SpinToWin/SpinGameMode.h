@@ -36,6 +36,8 @@ enum class ESpinState : uint8
 	ObstacleIntro,
 	/** Endless: paused on the "jams" screen (first time jams can happen) until the player presses the repair button. */
 	JamIntro,
+	/** Endless: paused on the "high posts" screen until the player presses the first button. */
+	HighObstacleIntro,
 	/** Tutorial: paused on a level's explanation screen until the player presses its confirm button. */
 	TutorialIntro,
 	/** The tutorial just ended and the run carries on as Endless: paused on a screen explaining lives
@@ -335,7 +337,8 @@ public:
 	/** Called by the player controller when the lift button is pressed or released. */
 	void SetLiftHeld(bool bHeld);
 
-	/** Called by the clock when the hand has hopped over an obstacle: gives a life back. */
+	/** Called by the clock when the hand has hopped over a (low) obstacle: every ObstaclesPerLife
+	 *  of these gives a life back. */
 	void OnObstacleCleared();
 
 	/** Called by the player controller for a clicked (or keyboard-confirmed) menu button. Index is
@@ -508,6 +511,19 @@ public:
 	/** Endless: chance (0..1) that a given zone comes with an obstacle in front of it. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
 	float ObstacleChance = 0.6f;
+
+	/** Endless: from this level on, some obstacles are high posts - they float above the dial,
+	 *  and the hand must NOT be lifted to get past them. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
+	int32 HighObstacleStartLevel = 12;
+
+	/** Clearing this many (low) posts earns one life back. High posts never do. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
+	int32 ObstaclesPerLife = 3;
+
+	/** Endless: chance (0..1) that an obstacle is a high post, once they've unlocked. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
+	float HighObstacleChance = 0.35f;
 
 	/** The obstacle is placed this many seconds of hand travel ahead of the hand, so there is time to react. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles")
@@ -770,6 +786,10 @@ public:
 	/** Lives left this run. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 Lives = 5;
+
+	/** Posts cleared towards the next life (0..ObstaclesPerLife-1). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 ObstacleLifeProgress = 0;
 
 	/** World time of the last life lost, used for HUD feedback. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -1111,6 +1131,15 @@ private:
 	/** This run carried on from the tutorial, which already taught jams: they can happen from the
 	 *  handoff level, and their explanation screen is skipped. */
 	bool bRunFromTutorial = false;
+
+	/** The obstacle just run into was a high post (for the message). */
+	bool bLastObstacleHigh = false;
+
+	/** The high-post screen was just shown: the next obstacle is a high post, so it's seen right away. */
+	bool bForceHighPost = false;
+
+	/** Whether the active player has already had high posts explained (saved per profile). */
+	bool HasSeenHighPosts() const;
 
 	/** Second Wind has already saved a life this run. */
 	bool bSecondWindUsed = false;

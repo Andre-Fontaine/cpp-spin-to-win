@@ -66,6 +66,10 @@ struct FSpinProfile
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 JamsFixed = 0;
 
+	/** High posts have been explained to them once already, so the screen doesn't come back. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	bool bSeenHighPosts = false;
+
 	/** Bonuses switched on for their next Endless run (bit mask of 1 << ESpinBonus). */
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 EquippedBonuses = 0;

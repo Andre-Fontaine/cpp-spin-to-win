@@ -120,7 +120,7 @@ void ASpinGameMode::BuildTutorialLevels()
 		L.Title = TEXT("LEVEL 5 - OBSTACLES");
 		L.IntroLines.Add(TEXT("Hold {LIFT} to lift the hand over posts."));
 		L.IntroLines.Add(TEXT("Lifting costs points - only lift when needed."));
-		L.IntroLines.Add(TEXT("Hit a post: -1 life. Clear one: +1 life."));
+		L.IntroLines.Add(FString::Printf(TEXT("Hit a post: -1 life. Clear %d: +1 life."), ObstaclesPerLife));
 		L.Instruction = TEXT("Hold {LIFT} to lift over posts");
 		L.Confirm = ETutorialConfirm::Lift;
 		L.Hits = 10;
@@ -291,7 +291,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	}
 
 	// Obstacles.
-	if (Clock && Clock->IsHandHittingObstacle(HandAngle))
+	if (Clock && Clock->IsHandHittingObstacle(HandAngle, &bLastObstacleHigh))
 	{
 		if (IsTutorial())
 		{
@@ -478,6 +478,14 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		// Waits for the repair button instead, see HandleRepairPressed.
 		break;
 
+	case ESpinState::HighObstacleIntro:
+		// Not the lift: the whole point is leaving it alone.
+		if (ButtonIndex == 0)
+		{
+			ResumeAfterIntro();
+		}
+		break;
+
 	case ESpinState::EndlessIntro:
 		if (ButtonIndex == 0)
 		{
@@ -587,20 +595,31 @@ void ASpinGameMode::SetLiftHeld(bool bHeld)
 
 void ASpinGameMode::OnObstacleCleared()
 {
-	if (State == ESpinState::Playing)
+	if (State != ESpinState::Playing)
 	{
-		++ObstaclesCleared;
+		return;
 	}
+	++ObstaclesCleared;
 
-	// The hand got over an obstacle: earn a life back.
-	if (State == ESpinState::Playing && Lives < GetRunMaxLives())
+	// Every few posts cleared earn a life back. The count carries on with full lives too.
+	if (++ObstacleLifeProgress >= ObstaclesPerLife)
 	{
-		++Lives;
-		if (GetWorld())
+		ObstacleLifeProgress = 0;
+		if (Lives < GetRunMaxLives())
 		{
-			LifeGainedTime = GetWorld()->GetTimeSeconds();
+			++Lives;
+			if (GetWorld())
+			{
+				LifeGainedTime = GetWorld()->GetTimeSeconds();
+			}
 		}
 	}
+}
+
+bool ASpinGameMode::HasSeenHighPosts() const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	return Profile && Profile->bSeenHighPosts;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1379,6 +1398,8 @@ void ASpinGameMode::StartGame(bool bDaily)
 	PromptStreak = 1;
 	LevelUpTime = -1000.f;
 	Lives = GetRunMaxLives();
+	ObstacleLifeProgress = 0;
+	bForceHighPost = false;
 	LifeLostTime = -1000.f;
 	LifeGainedTime = -1000.f;
 	bOutOfLives = false;
@@ -1487,15 +1508,17 @@ void ASpinGameMode::OnHit()
 	const bool bUnlocksButton = UnlockedButton != INDEX_NONE;
 	const bool bUnlocksObstacles = OldLevel < ObstacleStartLevel && NewLevel >= ObstacleStartLevel;
 	const bool bUnlocksJams = OldLevel < GetRunJamStartLevel() && NewLevel >= GetRunJamStartLevel();
-
 	// The explanation (pause) screens only show until the saved best has reached that level - after
 	// that the player has seen them, and the "next level" heads-up plus the level banner's unlock line
 	// are enough. Only one screen at a time; if several land on the same level, the new-button
-	// screen wins, then obstacles, then jams.
+	// screen wins, then obstacles, then jams, then high posts.
 	const bool bButtonIntro = bUnlocksButton && BestLevel < GetButtonUnlockLevel(UnlockedButton);
 	const bool bObstacleIntro = !bButtonIntro && bUnlocksObstacles && BestLevel < ObstacleStartLevel;
 	const bool bJamIntro = !bButtonIntro && !bObstacleIntro && bUnlocksJams && BestLevel < GetRunJamStartLevel();
-	const bool bPauseScreen = bButtonIntro || bObstacleIntro || bJamIntro;
+	// High posts are explained once per player, whenever they first come up - even if that player's
+	// best was already past them (they're newer than some saves).
+	const bool bHighObstacleIntro = !bButtonIntro && !bObstacleIntro && !bJamIntro && NewLevel >= HighObstacleStartLevel && !HasSeenHighPosts();
+	const bool bPauseScreen = bButtonIntro || bObstacleIntro || bJamIntro || bHighObstacleIntro;
 
 	// The normal "LEVEL N" banner is skipped when a pause screen takes over instead.
 	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
@@ -1563,6 +1586,16 @@ void ASpinGameMode::OnHit()
 		// Jams can happen from here on: explain the warning signs and the fix before the first one.
 		State = ESpinState::JamIntro;
 	}
+	else if (bHighObstacleIntro)
+	{
+		State = ESpinState::HighObstacleIntro;
+		bForceHighPost = true;
+		if (SaveData && SaveData->Profiles.IsValidIndex(SaveData->ActiveProfile))
+		{
+			SaveData->Profiles[SaveData->ActiveProfile].bSeenHighPosts = true;
+			WriteSaveData();
+		}
+	}
 }
 
 bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& OutHint) const
@@ -1588,6 +1621,11 @@ bool ASpinGameMode::GetUnlockAtLevel(int32 Level, FString& OutTitle, FString& Ou
 	{
 		Titles.Add(TEXT("JAMS"));
 		Hints.Add(TEXT("Sparks mean a jam is coming - mash {REPAIR} to repair it"));
+	}
+	if (Level == HighObstacleStartLevel)
+	{
+		Titles.Add(TEXT("HIGH POSTS"));
+		Hints.Add(TEXT("Purple posts float - don't lift, pass under them"));
 	}
 
 	OutTitle = FString::Join(Titles, TEXT("  +  "));
@@ -1679,7 +1717,11 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 	{
 	case ESpinMistake::MissedZone:  ShowNotice(TEXT("You missed the zone!")); break;
 	case ESpinMistake::WrongButton: ShowNotice(TEXT("Wrong button, or too early!")); break;
-	case ESpinMistake::HitObstacle: ShowNotice(bSecondWind ? TEXT("SECOND WIND - that hit was free!") : TEXT("You hit an obstacle!")); break;
+	case ESpinMistake::HitObstacle:
+		ShowNotice(bSecondWind ? TEXT("SECOND WIND - that hit was free!")
+			: bLastObstacleHigh ? TEXT("Don't lift under a purple post!")
+			: TEXT("You hit an obstacle!"));
+		break;
 	case ESpinMistake::HandBroke:   ShowNotice(TEXT("The hand broke free!")); break;
 	default: break;
 	}
@@ -1733,6 +1775,7 @@ void ASpinGameMode::StartTutorial()
 	Points = 0;
 	LastHitGrade = ESpinHitGrade::None;
 	Lives = MaxLives;
+	ObstacleLifeProgress = 0;
 	LifeLostTime = -1000.f;
 	LifeGainedTime = -1000.f;
 	bOutOfLives = false;
@@ -2559,10 +2602,15 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 		// ...and the zone sits beyond it, with a gap after it.
 		Offset = FMath::Clamp(FMath::Max(Offset, ObstacleDist + ObstacleClearGap + ZoneHalfWidth), MinZoneOffset, MaxOffset);
 
-		Clock->SpawnObstacle(
-			HandAngle + Direction * ObstacleDist,
-			RunRandom.FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction),
-			ObstacleDist);
+		const float Radius = RunRandom.FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction);
+		// The roll happens either way, so a forced one doesn't change the daily's sequence.
+		bool bHigh = false;
+		if (!IsTutorial() && GetLevel() >= HighObstacleStartLevel)
+		{
+			bHigh = RunRandom.FRand() < HighObstacleChance || bForceHighPost;
+			bForceHighPost = false;
+		}
+		Clock->SpawnObstacle(HandAngle + Direction * ObstacleDist, Radius, ObstacleDist, bHigh);
 	}
 
 	ZoneCenter = FMath::Fmod(HandAngle + Direction * Offset + 360.f, 360.f);
