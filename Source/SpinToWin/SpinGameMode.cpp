@@ -270,6 +270,9 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 			bInvincible = false;
 			InvincibleTimeRemaining = 0.f;
 			bHandWasInZone = false;
+			// Ending with the hand already inside a zone gives no fair chance to hit it (presses were
+			// ignored a moment ago), so that one zone can't count as a miss - it can still be hit.
+			bZoneMissForgiven = IsHandInZone();
 			InvincibilityEndTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
 		}
 		else
@@ -315,7 +318,13 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	}
 
 	// If the hand entered the zone and has now left it without a press, the player missed.
+	// (Except the zone the hand was already in when invincibility ended, see bZoneMissForgiven.)
 	const bool bInZone = IsHandInZone();
+	if (!bInZone && bZoneMissForgiven)
+	{
+		bZoneMissForgiven = false; // left the forgiven zone: from here on, misses count as usual
+		bHandWasInZone = false;
+	}
 	if (bHandWasInZone && !bInZone)
 	{
 		if (IsTutorial())
@@ -1889,6 +1898,7 @@ void ASpinGameMode::OnTutorialHit()
 	// Next target: the hand reverses and a new zone appears. The zone never changes until a hit succeeds.
 	Direction = -Direction;
 	bHandWasInZone = false;
+	bZoneMissForgiven = false;
 	bZoneTainted = false;
 	PickNextPrompt();
 

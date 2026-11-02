@@ -34,6 +34,8 @@ ASpinClock::ASpinClock()
 
 	UStaticMesh* CylinderMesh = CylinderFinder.Succeeded() ? CylinderFinder.Object : nullptr;
 	UStaticMesh* CubeMesh = CubeFinder.Succeeded() ? CubeFinder.Object : nullptr;
+	RoundPostMesh = CylinderMesh;
+	SquarePostMesh = CubeMesh;
 	BaseMaterial = MaterialFinder.Succeeded() ? MaterialFinder.Object : nullptr;
 	NeonMaterial = NeonMaterialFinder.Succeeded() ? NeonMaterialFinder.Object : nullptr;
 
@@ -88,6 +90,24 @@ ASpinClock::ASpinClock()
 		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("InnerRing%d"), i), CubeMesh, Root);
 		Segment->SetCastShadow(false);
 		InnerRingSegments.Add(Segment);
+	}
+
+	for (int32 i = 0; i < NumTicks; ++i)
+	{
+		UStaticMeshComponent* Tick = MakeMesh(*FString::Printf(TEXT("Tick%d"), i), CubeMesh, Root);
+		Tick->SetCastShadow(false);
+		TickMarks.Add(Tick);
+	}
+
+	for (int32 i = 0; i < NumTrackSegments; ++i)
+	{
+		UStaticMeshComponent* Inner = MakeMesh(*FString::Printf(TEXT("TrackInner%d"), i), CubeMesh, Root);
+		Inner->SetCastShadow(false);
+		TrackInnerSegments.Add(Inner);
+
+		UStaticMeshComponent* Outer = MakeMesh(*FString::Printf(TEXT("TrackOuter%d"), i), CubeMesh, Root);
+		Outer->SetCastShadow(false);
+		TrackOuterSegments.Add(Outer);
 	}
 
 	for (int32 i = 0; i < NumObstacleSlots; ++i)
@@ -158,7 +178,7 @@ void ASpinClock::BuildVisuals()
 		Post->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, ObstacleHeight / 100.f));
 		Post->SetVisibility(false);
 	}
-	// High posts' shadows: a flat disc lying on the dial.
+	// High posts' shadows: a flat square lying on the dial (matching the post's shape, see SpawnObstacle).
 	for (UStaticMeshComponent* Shadow : ObstacleShadows)
 	{
 		Shadow->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, 1.f / 100.f));
@@ -182,14 +202,22 @@ void ASpinClock::BuildVisuals()
 		return MID;
 	};
 
-	MakeMID(Rim, FLinearColor(0.12f, 0.13f, 0.17f));
-	MakeMID(Dial, FLinearColor(0.03f, 0.04f, 0.07f));
-	HubMID = MakeMID(Hub, FLinearColor(0.9f, 0.9f, 0.9f));
-	HandMID = MakeMID(Hand, FLinearColor::White);
+	// The face and rim are dark hull, like the city's buildings.
+	MakeMID(Rim, RimColor);
+	MakeMID(Dial, DialColor);
+
+	// The hand, hub and zone glow like the city's neon (falling back to the plain lit material).
+	if (NeonMaterial)
+	{
+		Hub->SetMaterial(0, NeonMaterial);
+		Hand->SetMaterial(0, NeonMaterial);
+	}
+	HubMID = MakeMID(Hub, HubIdleColor);
+	HandMID = MakeMID(Hand, FLinearColor::White * (NeonMaterial ? HandGlow : 1.f));
 
 	if (BaseMaterial)
 	{
-		ZoneMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
+		ZoneMID = UMaterialInstanceDynamic::Create(NeonMaterial ? NeonMaterial.Get() : BaseMaterial.Get(), this);
 		for (UStaticMeshComponent* Segment : ZoneSegments)
 		{
 			Segment->SetMaterial(0, ZoneMID);
@@ -255,13 +283,13 @@ void ASpinClock::BuildVisuals()
 	// but as a full 360-degree circle that never moves - only its colour changes.
 	if (NeonMaterial)
 	{
-		auto BuildRing = [this](TArray<TObjectPtr<UStaticMeshComponent>>& Segments, float RadiusFraction, UMaterialInstanceDynamic* MID)
+		auto BuildRing = [this](TArray<TObjectPtr<UStaticMeshComponent>>& Segments, float RadiusFraction, float ThicknessFraction, float Z, float Height, UMaterialInstanceDynamic* MID)
 		{
 			const int32 Count = Segments.Num();
 			const float Rho = DialRadius * RadiusFraction;
 			const float StepDeg = 360.f / Count;
 			const float TangentLength = FMath::DegreesToRadians(StepDeg) * Rho * 1.15f;
-			const float RadialLength = DialRadius * RingThicknessFraction;
+			const float RadialLength = DialRadius * ThicknessFraction;
 
 			for (int32 i = 0; i < Count; ++i)
 			{
@@ -269,22 +297,66 @@ void ASpinClock::BuildVisuals()
 				const float Rad = FMath::DegreesToRadians(AngleDeg);
 
 				UStaticMeshComponent* Segment = Segments[i];
-				Segment->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 2.f));
+				Segment->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), Z));
 				Segment->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
-				Segment->SetRelativeScale3D(FVector(RadialLength / 100.f, TangentLength / 100.f, 2.5f / 100.f));
+				Segment->SetRelativeScale3D(FVector(RadialLength / 100.f, TangentLength / 100.f, Height / 100.f));
 				Segment->SetMaterial(0, MID);
 			}
 		};
 
 		OuterRingMID = UMaterialInstanceDynamic::Create(NeonMaterial, this);
-		BuildRing(OuterRingSegments, OuterRingRadiusFraction, OuterRingMID);
+		BuildRing(OuterRingSegments, OuterRingRadiusFraction, RingThicknessFraction, 2.f, 2.5f, OuterRingMID);
 
 		InnerRingMID = UMaterialInstanceDynamic::Create(NeonMaterial, this);
 		if (InnerRingMID)
 		{
 			InnerRingMID->SetVectorParameterValue(ColorParam, InnerRingColor);
 		}
-		BuildRing(InnerRingSegments, InnerRingRadiusFraction, InnerRingMID);
+		BuildRing(InnerRingSegments, InnerRingRadiusFraction, RingThicknessFraction, 2.f, 2.5f, InnerRingMID);
+
+		// Faint track along both edges of the zone band. It sits low, so a zone covers it where it lies.
+		TrackMID = UMaterialInstanceDynamic::Create(NeonMaterial, this);
+		if (TrackMID)
+		{
+			TrackMID->SetVectorParameterValue(ColorParam, TrackColor);
+		}
+		const float TrackThickness = RingThicknessFraction * 0.5f;
+		BuildRing(TrackInnerSegments, ZoneRadiusFraction - ZoneThicknessFraction * 0.5f, TrackThickness, 0.6f, 1.f, TrackMID);
+		BuildRing(TrackOuterSegments, ZoneRadiusFraction + ZoneThicknessFraction * 0.5f, TrackThickness, 0.6f, 1.f, TrackMID);
+
+		// Clock-face ticks: 60 around the edge, every fifth one longer and wider (the "hours").
+		TickMID = UMaterialInstanceDynamic::Create(NeonMaterial, this);
+		if (TickMID)
+		{
+			TickMID->SetVectorParameterValue(ColorParam, TickColor);
+		}
+		for (int32 i = 0; i < TickMarks.Num(); ++i)
+		{
+			const bool bMajor = i % 5 == 0;
+			const float AngleDeg = i * 360.f / TickMarks.Num();
+			const float Rad = FMath::DegreesToRadians(AngleDeg);
+			const float Length = R * (bMajor ? 0.05f : 0.022f);
+			const float Width = bMajor ? 6.f : 2.5f;
+			const float Rho = R * TickRadiusFraction + (bMajor ? 0.f : R * 0.014f); // minor ticks hug the rim
+
+			UStaticMeshComponent* Tick = TickMarks[i];
+			Tick->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 1.f));
+			Tick->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
+			Tick->SetRelativeScale3D(FVector(Length / 100.f, Width / 100.f, 1.5f / 100.f));
+			Tick->SetMaterial(0, TickMID);
+		}
+	}
+	else
+	{
+		// Without the neon material the decorative lines can't glow: hide them rather than leave
+		// unscaled cubes sitting at the centre of the dial.
+		for (auto* Group : { &OuterRingSegments, &InnerRingSegments, &TrackInnerSegments, &TrackOuterSegments, &TickMarks })
+		{
+			for (UStaticMeshComponent* Comp : *Group)
+			{
+				Comp->SetVisibility(false);
+			}
+		}
 	}
 
 	// Camera: fixed, looking down at the dial from the "6 o'clock" side.
@@ -299,6 +371,7 @@ void ASpinClock::BuildVisuals()
 	// Fill light so the scene is visible even in an unlit level.
 	FillLight->SetRelativeLocation(FVector(0.f, 0.f, R * 2.5f));
 	FillLight->SetIntensity(FillLightIntensity);
+	FillLight->SetLightColor(FillLightColor);
 	FillLight->SetAttenuationRadius(R * 12.f);
 }
 
@@ -433,7 +506,7 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 	// The pillar glows hot with each catch, then cools.
 	if (HubMID)
 	{
-		HubMID->SetVectorParameterValue(ColorParam, FMath::Lerp(FLinearColor(0.9f, 0.9f, 0.9f), FLinearColor(1.f, 0.45f, 0.08f), GrindFlash));
+		HubMID->SetVectorParameterValue(ColorParam, FMath::Lerp(HubIdleColor, HubHotColor, GrindFlash));
 	}
 
 	// Move and shrink the live ones.
@@ -543,7 +616,11 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 
 	// The zone brightens while the hand is inside it.
 	const bool bActive = GM.State == ESpinState::Playing && GM.IsHandInZone();
-	const FLinearColor ZoneColor = bActive ? (ZoneBase + (FLinearColor::White - ZoneBase) * 0.45f) : ZoneBase;
+	FLinearColor ZoneColor = bActive ? (ZoneBase + (FLinearColor::White - ZoneBase) * 0.45f) : ZoneBase;
+	if (NeonMaterial)
+	{
+		ZoneColor *= bActive ? ZoneActiveGlow : ZoneGlow;
+	}
 
 	// Invincibility: everything but the hand dims and slowly breathes until play is live again.
 	const float Breath = 0.1f * FMath::Sin(GetWorld()->GetTimeSeconds() * 4.f);
@@ -576,6 +653,17 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 		InnerRingMID->SetVectorParameterValue(ColorParam, InnerRingColor * RingGlow);
 	}
 
+	// Ticks and track flare too, but more gently than the rings so they stay in the background.
+	const float DetailGlow = (1.f + RingHitPulseBoost * 0.5f * Pulse) * Dim;
+	if (TickMID)
+	{
+		TickMID->SetVectorParameterValue(ColorParam, TickColor * DetailGlow);
+	}
+	if (TrackMID)
+	{
+		TrackMID->SetVectorParameterValue(ColorParam, TrackColor * DetailGlow);
+	}
+
 	if (FillLight)
 	{
 		FillLight->SetIntensity(FillLightIntensity * (1.f + FillLightHitPulseBoost * Pulse) * Dim);
@@ -603,7 +691,7 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 		{
 			HandColor = FLinearColor(0.4f, 0.9f, 1.f);
 		}
-		HandMID->SetVectorParameterValue(ColorParam, HandColor);
+		HandMID->SetVectorParameterValue(ColorParam, NeonMaterial ? HandColor * HandGlow : HandColor);
 	}
 }
 
@@ -711,13 +799,21 @@ void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float Ahead
 		S.bPassed = false;
 		S.bHigh = bHigh;
 
+		// High posts are flat squares, so they read differently from the round low posts at a glance.
+		UStaticMesh* Shape = bHigh ? SquarePostMesh.Get() : RoundPostMesh.Get();
 		UStaticMeshComponent* Post = ObstacleMeshes[i];
 		Post->SetVisibility(true);
+		if (Shape)
+		{
+			Post->SetStaticMesh(Shape);
+			ObstacleShadows[i]->SetStaticMesh(Shape);
+		}
 		Post->SetMaterial(0, bHigh ? HighObstacleMID.Get() : ObstacleMID.Get());
 		Post->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, (bHigh ? HighObstacleHeight : ObstacleHeight) / 100.f));
 		Post->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
 		ObstacleShadows[i]->SetVisibility(bHigh);
 		ObstacleShadows[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, 0.6f));
+		ApplyObstacleFacing(i);
 		return;
 	}
 }
@@ -785,7 +881,18 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 
 		ObstacleMeshes[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
 		ObstacleShadows[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, 0.6f));
+		ApplyObstacleFacing(i);
 	}
+}
+
+void ASpinClock::ApplyObstacleFacing(int32 Index)
+{
+	// Squares turn to face the hub, so their leading edge lies along the hand as it sweeps in -
+	// which keeps what you see in line with the hit test (IsHandHittingObstacle).
+	const FObstacleState& S = ObstacleStates[Index];
+	const FRotator Facing(0.f, FMath::RadiansToDegrees(FMath::Atan2(S.Current.Y, S.Current.X)), 0.f);
+	ObstacleMeshes[Index]->SetRelativeRotation(Facing);
+	ObstacleShadows[Index]->SetRelativeRotation(Facing);
 }
 
 bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh) const

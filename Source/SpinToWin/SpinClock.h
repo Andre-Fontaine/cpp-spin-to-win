@@ -16,6 +16,7 @@ class UCameraComponent;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UPointLightComponent;
+class UStaticMesh;
 class USceneComponent;
 class UStaticMeshComponent;
 class ASpinGameMode;
@@ -150,6 +151,45 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
 	FLinearColor GoodMarkColor = FLinearColor(2.f, 2.f, 2.2f);
 
+	// ---------------- Look (matches the city: dark hulls, neon accents) ----------------
+
+	/** Dial face: the city's navy hull colour. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	FLinearColor DialColor = FLinearColor(0.008f, 0.012f, 0.022f);
+
+	/** Rim under the dial: a touch lighter than the face so the edge still reads. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	FLinearColor RimColor = FLinearColor(0.025f, 0.03f, 0.045f);
+
+	/** The hand glows (neon material); its state colours are multiplied by this. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	float HandGlow = 1.6f;
+
+	/** Glow of the target zone band normally, and while the hand is inside it. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	float ZoneGlow = 0.8f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	float ZoneActiveGlow = 1.6f;
+
+	/** Hub pillar glow at rest, and at the peak of a gear catch while sparking. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	FLinearColor HubIdleColor = FLinearColor(0.35f, 0.5f, 0.7f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	FLinearColor HubHotColor = FLinearColor(6.f, 2.2f, 0.3f);
+
+	/** Clock-face ticks just inside the outer ring (every fifth one is a longer "hour" tick). */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	float TickRadiusFraction = 0.935f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	FLinearColor TickColor = FLinearColor(0.12f, 0.45f, 0.9f);
+
+	/** Faint guide lines along both edges of the band the target zone sits in. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	FLinearColor TrackColor = FLinearColor(0.04f, 0.12f, 0.32f);
+
 	// ---------------- Neon ring highlights ----------------
 
 	/** Outer ring sits just inside the dial's edge and always shows the currently-needed button's
@@ -225,8 +265,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
 	float HighObstacleBottom = 45.f;
 
+	/** High posts are flat square slabs (low ones are round), so this is the slab's thickness. */
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
-	float HighObstacleHeight = 60.f;
+	float HighObstacleHeight = 16.f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
 	FLinearColor HighObstacleColor = FLinearColor(0.7f, 0.15f, 1.f);
@@ -262,6 +303,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
 	float FillLightIntensity = 400000.f;
 
+	/** Slightly cool, like the city's blue-cyan light. */
+	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	FLinearColor FillLightColor = FLinearColor(0.8f, 0.88f, 1.f);
+
 	// ---------------- State ----------------
 
 	/** How far the hand is lifted above the dial (world units). 0 = resting on the dial. */
@@ -285,6 +330,8 @@ private:
 	/** Radius of the hub pillar at the centre, as a fraction of the dial radius. */
 	static constexpr float HubRadiusFraction = 0.06f;
 	static constexpr int32 NumRingSegments = 90;
+	static constexpr int32 NumTicks = 60;
+	static constexpr int32 NumTrackSegments = 72;
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
@@ -317,6 +364,15 @@ private:
 	TArray<TObjectPtr<UStaticMeshComponent>> InnerRingSegments;
 
 	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> TickMarks;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> TrackInnerSegments;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> TrackOuterSegments;
+
+	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleMeshes;
 
 	/** A dark disc on the dial under each high post, so it reads as floating over that spot. */
@@ -338,7 +394,14 @@ private:
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> BaseMaterial;
 
-	/** Emissive neon material shared with the city's level dressing, used for the ring highlights. */
+	/** Low posts are round; high posts are flat squares (and so are their shadows). */
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> RoundPostMesh;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMesh> SquarePostMesh;
+
+	/** Emissive neon material shared with the city's level dressing: rings, ticks, track, hand, hub and zone. */
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> NeonMaterial;
 
@@ -358,6 +421,12 @@ private:
 	TObjectPtr<UMaterialInstanceDynamic> InnerRingMID;
 
 	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> TickMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> TrackMID;
+
+	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> HandMID;
 
 	UPROPERTY()
@@ -374,6 +443,9 @@ private:
 
 	/** Where an obstacle's mesh sits: its centre height, standing on the dial or floating. */
 	float GetObstacleCenterZ(const FObstacleState& S) const;
+
+	/** Turn an obstacle (and its shadow) to face the hub. Only visible on the square high posts. */
+	void ApplyObstacleFacing(int32 Index);
 
 	TWeakObjectPtr<ASpinGameMode> GameMode;
 

@@ -1114,6 +1114,10 @@ private:
 	TObjectPtr<USpinSaveGame> SaveData;
 
 	bool bHandWasInZone = false;
+
+	/** Set when invincibility ends with the hand already inside the zone: leaving that zone without
+	 *  a press isn't a miss. Cleared once the hand leaves it, or on a hit. */
+	bool bZoneMissForgiven = false;
 	float GameOverTime = 0.f;
 
 	/** Whether the last input came from a gamepad (InputStyle then follows bPlayStationIcons). */
