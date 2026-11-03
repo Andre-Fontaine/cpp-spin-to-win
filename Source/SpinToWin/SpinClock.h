@@ -20,6 +20,7 @@ class UStaticMesh;
 class USceneComponent;
 class UStaticMeshComponent;
 class ASpinGameMode;
+class ASpinCityFX;
 
 /** Plain (non-reflected) bookkeeping for one obstacle slot. */
 enum class EObstaclePhase : uint8
@@ -62,6 +63,7 @@ class SPINTOWIN_API ASpinClock : public AActor
 public:
 	ASpinClock();
 
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -116,195 +118,211 @@ public:
 	// ---------------- Layout ----------------
 
 	/** Radius of the dial in world units. Everything else scales from this. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float DialRadius = 600.f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float DialThickness = 20.f;
 
 	/** Hand length as a fraction of the dial radius. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float HandLengthFraction = 0.9f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float HandWidth = 28.f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float HandHeight = 12.f;
 
 	/** Where the target zone sits, as a fraction of the dial radius (centre of the band). */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float ZoneRadiusFraction = 0.78f;
 
 	/** Thickness of the target zone band as a fraction of the dial radius. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float ZoneThicknessFraction = 0.2f;
 
 	/** The neon grade lines across the zone: width in world units, and the glow colour of the
 	 *  PERFECT and GOOD boundaries (values above 1 bloom). */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float ZoneMarkWidth = 3.f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	FLinearColor PerfectMarkColor = FLinearColor(4.f, 2.8f, 0.5f);
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Layout")
+	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	FLinearColor GoodMarkColor = FLinearColor(2.f, 2.f, 2.2f);
 
 	// ---------------- Look (matches the city: dark hulls, neon accents) ----------------
 
 	/** Dial face: the city's navy hull colour. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor DialColor = FLinearColor(0.008f, 0.012f, 0.022f);
 
 	/** Rim under the dial: a touch lighter than the face so the edge still reads. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor RimColor = FLinearColor(0.025f, 0.03f, 0.045f);
 
 	/** The hand glows (neon material); its state colours are multiplied by this. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	float HandGlow = 1.6f;
 
 	/** Glow of the target zone band normally, and while the hand is inside it. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	float ZoneGlow = 0.8f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	float ZoneActiveGlow = 1.6f;
 
 	/** Hub pillar glow at rest, and at the peak of a gear catch while sparking. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor HubIdleColor = FLinearColor(0.35f, 0.5f, 0.7f);
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor HubHotColor = FLinearColor(6.f, 2.2f, 0.3f);
 
 	/** Clock-face ticks just inside the outer ring (every fifth one is a longer "hour" tick). */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	float TickRadiusFraction = 0.935f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor TickColor = FLinearColor(0.12f, 0.45f, 0.9f);
 
 	/** Faint guide lines along both edges of the band the target zone sits in. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Look")
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor TrackColor = FLinearColor(0.04f, 0.12f, 0.32f);
 
 	// ---------------- Neon ring highlights ----------------
 
 	/** Outer ring sits just inside the dial's edge and always shows the currently-needed button's
 	 *  colour (same colour as the target zone), so the whole rim reads as a glowing accent. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon")
 	float OuterRingRadiusFraction = 0.99f;
 
 	/** Inner ring frames the hub with a fixed accent colour. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon")
 	float InnerRingRadiusFraction = 0.16f;
 
 	/** Thickness of both rings, as a fraction of the dial radius. Kept small for a thin glowing line. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon")
 	float RingThicknessFraction = 0.012f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon")
 	FLinearColor InnerRingColor = FLinearColor(0.1f, 0.9f, 1.f);
 
 	/** At the peak of a successful hit's pulse, both rings' glow is multiplied by 1 + this. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon")
 	float RingHitPulseBoost = 6.f;
 
 	/** At the peak of a successful hit's pulse, the fill light is multiplied by 1 + this. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon")
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon")
 	float FillLightHitPulseBoost = 1.5f;
 
 	/** During invincibility the dial's glow (zone, grade lines, rings) and the fill light dim to
 	 *  this fraction and gently breathe, so it's obvious nothing counts yet. The hand stays bright. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon", meta = (ClampMin = "0", ClampMax = "1"))
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon", meta = (ClampMin = "0", ClampMax = "1"))
 	float InvincibleBrightness = 0.4f;
 
 	/** Seconds to dim down when invincibility starts, and to brighten back up when it ends. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Neon", meta = (ClampMin = "0.01"))
+	UPROPERTY(EditAnywhere, Category = "Clock|Neon", meta = (ClampMin = "0.01"))
 	float InvincibleFadeTime = 0.3f;
 
 	// ---------------- Lift tuning ----------------
 
 	/** How high the hand rises while the lift button is held (world units). Must be above ObstacleHeight. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
 	float MaxHandLift = 150.f;
 
 	/** Rise speed, world units per second. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
 	float LiftRiseSpeed = 1400.f;
 
 	/** Lowering speed, world units per second. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
 	float LiftLowerSpeed = 1000.f;
 
 	/** One lift lasts at most this many degrees of hand travel (360 = one full turn), then the
 	 *  hand drops by itself even if the button is still held. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift", meta = (ClampMin = "1"))
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift", meta = (ClampMin = "1"))
 	float MaxLiftTravelDeg = 360.f;
 
 	/** Above this height the hand counts as "raised" (only changes its colour). */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Lift")
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
 	float RaisedThreshold = 40.f;
 
 	// ---------------- Obstacle tuning ----------------
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float ObstacleRadius = 72.f;
 
 	/** The hand clears an obstacle once it is lifted at least this high. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float ObstacleHeight = 90.f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	FLinearColor ObstacleColor = FLinearColor(0.95f, 0.3f, 0.1f);
 
 	/** High posts float this far above the dial (world units). Lifting the hand at all reaches
 	 *  them; a resting hand passes underneath. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float HighObstacleBottom = 45.f;
 
 	/** High posts are flat square slabs (low ones are round), so this is the slab's thickness. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float HighObstacleHeight = 16.f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	FLinearColor HighObstacleColor = FLinearColor(0.7f, 0.15f, 1.f);
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float ObstacleSlideInTime = 0.4f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Obstacles")
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float ObstacleSlideOutTime = 0.3f;
 
 	// ---------------- Camera ----------------
 
 	/** Camera distance from the dial centre, as a multiple of the dial radius. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float CameraDistanceFactor = 8.0f;
 
 	/** Degrees the camera looks down. 90 = straight top-down, lower = more side-on. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
-	float CameraPitch = 42.f;
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
+	float CameraPitch = 35.f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float CameraFOV = 68.f;
 
+	/** As the city lights up (see ASpinCityFX), the camera eases back and lifts its gaze toward the
+	 *  skyline, reaching these values once the whole city is lit. It swoops back in when a run starts. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
+	bool bCameraFollowsReveal = true;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
+	float RevealedCameraPitch = 28.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
+	float RevealedCameraDistanceFactor = 10.f;
+
+	/** Once the city is lit, the camera also tilts its view up by this many degrees (without moving),
+	 *  so the dial drops toward the bottom of the frame and the skyline rises into view. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
+	float RevealedCameraLookUp = 13.f;
+
 	/** Biggest camera offset (world units) at full shake intensity. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float MaxShakeOffset = 91.f;
 
 	/** How fast a shake dies down (intensity units per second). */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float ShakeDecayPerSecond = 2.5f;
 
 	/** Brightness of the light over the dial. Lower it if the scene looks washed out. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float FillLightIntensity = 400000.f;
 
 	/** Slightly cool, like the city's blue-cyan light. */
-	UPROPERTY(EditDefaultsOnly, Category = "Clock|Camera")
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	FLinearColor FillLightColor = FLinearColor(0.8f, 0.88f, 1.f);
 
 	// ---------------- State ----------------
@@ -320,6 +338,10 @@ private:
 	void UpdateObstacles(float DeltaSeconds);
 	void UpdateObstaclePassing(ASpinGameMode& GM, float Moved);
 	void UpdateShake(float DeltaSeconds);
+
+	/** Where the camera rests (before shake): 0 = the close-up from CameraPitch / CameraDistanceFactor,
+	 *  1 = the wide shot from the Revealed values. */
+	void SetCameraBase(float Blend);
 	void UpdateSparks(float DeltaSeconds);
 
 	static constexpr int32 NumZoneSegments = 48;
@@ -448,6 +470,9 @@ private:
 	void ApplyObstacleFacing(int32 Index);
 
 	TWeakObjectPtr<ASpinGameMode> GameMode;
+
+	/** The city effects, whose reveal the camera follows (see bCameraFollowsReveal). */
+	TWeakObjectPtr<ASpinCityFX> CityFX;
 
 	TArray<FObstacleState> ObstacleStates;
 

@@ -1963,11 +1963,12 @@ void ASpinHUD::DrawPauseMenu(const ASpinGameMode& GM)
 	DrawLabel(TEXT("PAUSED"), CX, Y, TitleSize, Gold, ESpinTextAlign::Center, true);
 	Y += LineH(TitleSize) + U(24.f);
 
-	// Same order as the hit buttons, which pick them (see ASpinGameMode::HandleButtonPressed).
+	// Key hints match ASpinGameMode::HandleButtonPressed: the first button resumes (the second does
+	// too, as "back"), the third quits. Restart has no key - it's click-only, so it can't be hit by accident.
 	const float BtnW = CardW - P * 2.f;
 	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RESUME"), EMenuAction::ResumeGame, Gold, KeyHintOf(GM, 0));
 	Y += BtnH + BtnGap;
-	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RESTART"), EMenuAction::RestartRun, Cyan, KeyHintOf(GM, 1));
+	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RESTART"), EMenuAction::RestartRun, Cyan, FString());
 	Y += BtnH + BtnGap;
 	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::QuitRunToMenu, Red, KeyHintOf(GM, 2));
 	Y += BtnH + U(20.f);

@@ -47,6 +47,7 @@ Early prototype.
 - [x] Pause menu (resume, restart, main menu)
 - [x] High posts (from level 12): purple posts that float above the dial - pass under them, don't lift
 - [x] Unlockable bonuses earned through play, equipped into slots that open at levels 25 and 40; runs that use them are marked on the leaderboard
+- [x] A procedural neon city that lights up from the dial outward as the run goes on
 - [ ] Online leaderboard
 
 ## About this repo
@@ -60,8 +61,9 @@ This repository contains the **C++ source and project config only**. The `Conten
 | `SpinGameMode` | Game rules: hand movement, scoring, speed ramp, zone placement, lives/jams, game states, menus and settings |
 | `SpinPlayerController` | Reads input (keyboard/gamepad/mouse) and forwards it to the game mode |
 | `SpinHUD` | The in-run HUD (score, level, health, controls, callouts) and every menu and pause screen, all drawn in code |
-| `SpinClock` | The in-world dial actor: hand, zone, and obstacle meshes |
-| `SpinCityFX` | Purely cosmetic ambient effects (floor grid, circuit traces, flickering nodes) driven by level-placed dressing |
+| `SpinClock` | The in-world dial actor: hand, zone, obstacle meshes, and the camera (which pulls back toward the skyline as the city lights up) |
+| `SpinCityFX` | The city reveal (the lights spread out from the dial as the run goes on, via `MPC_CityReveal`) and ambient effects on level-placed dressing |
+| `SpinCityBuilder` | The procedural neon city: districts, river and suspension bridge, parks, landmarks, flying traffic, wind, switching windows, and the jam glitch |
 | `SpinSaveGame` | Saved data: player profiles (with personal bests) and the shared leaderboard (top runs by level and by score) |
 
 Difficulty values (start speed, max speed, zone size, lives, jam timing, and so on) are `UPROPERTY` fields on `SpinGameMode`.

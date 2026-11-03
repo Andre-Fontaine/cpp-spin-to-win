@@ -8,6 +8,7 @@
 #include "AudioDevice.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/GameUserSettings.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -183,11 +184,20 @@ void ASpinGameMode::StartPlay()
 		return;
 	}
 
-	// Spawn the physical dial a little above the origin (keeps it clear of any floor at Z=0)
-	// and make its camera the player's view.
-	FActorSpawnParameters Params;
-	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	Clock = World->SpawnActor<ASpinClock>(ASpinClock::StaticClass(), FTransform(FVector(0.f, 0.f, 100.f)), Params);
+	// Use the dial placed in the level (so its settings - camera, colours, sizes - can be tuned in the
+	// editor). If there isn't one, spawn a default dial a little above the origin (clear of any floor
+	// at Z=0). Either way its camera becomes the player's view.
+	for (TActorIterator<ASpinClock> It(World); It; ++It)
+	{
+		Clock = *It;
+		break;
+	}
+	if (!Clock)
+	{
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		Clock = World->SpawnActor<ASpinClock>(ASpinClock::StaticClass(), FTransform(FVector(0.f, 0.f, 100.f)), Params);
+	}
 
 	if (Clock)
 	{
@@ -346,10 +356,12 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 
 void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 {
-	// Mirrors the pause menu's buttons: resume, restart, main menu.
+	// Pause menu: the first button resumes, and so does the second - it's "back" on a gamepad (B / O),
+	// so pressing it out of habit mustn't throw the run away. The third goes to the main menu.
+	// Restarting is mouse-only, so it can't happen by accident.
 	if (IsPauseMenuOpen())
 	{
-		static const EMenuAction PauseActions[] = { EMenuAction::ResumeGame, EMenuAction::RestartRun, EMenuAction::QuitRunToMenu };
+		static const EMenuAction PauseActions[] = { EMenuAction::ResumeGame, EMenuAction::ResumeGame, EMenuAction::QuitRunToMenu };
 		if (ButtonIndex >= 0 && ButtonIndex < UE_ARRAY_COUNT(PauseActions))
 		{
 			HandleMenuAction(PauseActions[ButtonIndex]);

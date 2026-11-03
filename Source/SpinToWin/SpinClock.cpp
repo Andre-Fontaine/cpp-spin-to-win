@@ -2,7 +2,10 @@
 
 #include "SpinClock.h"
 #include "SpinGameMode.h"
+#include "SpinCityFX.h"
+#include "SpinCityBuilder.h"
 #include "Camera/CameraComponent.h"
+#include "EngineUtils.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -16,6 +19,77 @@ namespace
 {
 	// The engine's built-in BasicShapeMaterial exposes a vector parameter called "Color".
 	const FName ColorParam(TEXT("Color"));
+
+	// The camera frames the city out to this multiple of the lit radius (plus a fixed margin), so
+	// the spreading light always stays inside the shot instead of running off the top of it.
+	constexpr float CameraLeadMultiple = 1.35f;
+	constexpr float CameraLeadMargin = 2500.f;
+}
+
+/** How far into its close-up -> wide-shot move the camera should be (0..1), given how far the city's
+ *  light has spread: the least pulled-back pose whose view still reaches past the light's edge. */
+static float GetRevealCameraBlend(const ASpinClock& Clock)
+{
+	const ASpinCityFX* FX = nullptr;
+	for (TActorIterator<ASpinCityFX> It(Clock.GetWorld()); It; ++It)
+	{
+		FX = *It;
+		break;
+	}
+	if (!FX)
+	{
+		return 0.f;
+	}
+
+	// How far the light has spread from the dial, in world units.
+	float CityRadius = FX->RevealStartRadius;
+	for (TActorIterator<ASpinCityBuilder> It(Clock.GetWorld()); It; ++It)
+	{
+		CityRadius = FMath::Max(CityRadius, It->GetCityRadius());
+	}
+	const float Fraction = FX->GetRevealFraction();
+	const float LitRadius = FMath::Lerp(FX->RevealStartRadius, CityRadius, Fraction);
+	const float Wanted = LitRadius * CameraLeadMultiple + CameraLeadMargin;
+
+	// How far ahead of the dial the top of the frame meets the ground, for a given blend.
+	const UCameraComponent* Camera = Clock.FindComponentByClass<UCameraComponent>();
+	const float Aspect = Camera ? FMath::Max(0.5f, Camera->AspectRatio) : 16.f / 9.f;
+	const float HalfVerticalFOV = FMath::RadiansToDegrees(FMath::Atan(FMath::Tan(FMath::DegreesToRadians(Clock.CameraFOV * 0.5f)) / Aspect));
+	auto Reach = [&Clock, HalfVerticalFOV](float Blend) -> float
+	{
+		const float Pitch = FMath::Lerp(Clock.CameraPitch, Clock.RevealedCameraPitch, Blend);
+		const float Dist = Clock.DialRadius * FMath::Lerp(Clock.CameraDistanceFactor, Clock.RevealedCameraDistanceFactor, Blend);
+		const float ViewPitch = Pitch - Clock.RevealedCameraLookUp * Blend;
+		const float TopEdgeDown = ViewPitch - HalfVerticalFOV; // degrees below the horizon
+		if (TopEdgeDown < 0.5f)
+		{
+			return BIG_NUMBER; // the top of the frame is at or above the horizon
+		}
+		const float PitchRad = FMath::DegreesToRadians(Pitch);
+		const float Height = Dist * FMath::Sin(PitchRad) + Clock.GetActorLocation().Z;
+		return Height / FMath::Tan(FMath::DegreesToRadians(TopEdgeDown)) - Dist * FMath::Cos(PitchRad);
+	};
+
+	// The smallest blend that sees far enough (the reach grows steadily with the blend).
+	float Blend = 1.f;
+	if (Reach(0.f) >= Wanted)
+	{
+		Blend = 0.f;
+	}
+	else if (Reach(1.f) >= Wanted)
+	{
+		float Lo = 0.f;
+		float Hi = 1.f;
+		for (int32 i = 0; i < 14; ++i)
+		{
+			const float Mid = (Lo + Hi) * 0.5f;
+			(Reach(Mid) >= Wanted ? Hi : Lo) = Mid;
+		}
+		Blend = Hi;
+	}
+
+	// Either way, finish on the full wide shot once the whole city is lit.
+	return FMath::Max(Blend, FMath::SmoothStep(0.f, 1.f, Fraction));
 }
 
 ASpinClock::ASpinClock()
@@ -137,11 +211,38 @@ ASpinClock::ASpinClock()
 	FillLight->SetCastShadows(false);
 }
 
+void ASpinClock::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	// Lay the dial out in the editor too, so a placed dial shows what it will look like (and where
+	// its camera points) while its settings are tuned. Re-runs whenever a setting changes.
+	BuildVisuals();
+
+	// The zone only exists during a run; outside play there's nowhere to put it.
+	if (!GetWorld() || !GetWorld()->IsGameWorld())
+	{
+		for (UStaticMeshComponent* Segment : ZoneSegments)
+		{
+			Segment->SetVisibility(false);
+		}
+		for (UStaticMeshComponent* Mark : ZoneMarks)
+		{
+			Mark->SetVisibility(false);
+		}
+	}
+}
+
 void ASpinClock::BeginPlay()
 {
 	Super::BeginPlay();
 
 	GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+	for (TActorIterator<ASpinCityFX> It(GetWorld()); It; ++It)
+	{
+		CityFX = *It;
+		break;
+	}
 	if (const ASpinGameMode* GM = GameMode.Get())
 	{
 		PrevHandAngle = GM->HandAngle;
@@ -359,13 +460,8 @@ void ASpinClock::BuildVisuals()
 		}
 	}
 
-	// Camera: fixed, looking down at the dial from the "6 o'clock" side.
-	const float Dist = R * CameraDistanceFactor;
-	const float PitchRad = FMath::DegreesToRadians(CameraPitch);
-	CameraBaseLocation = FVector(-Dist * FMath::Cos(PitchRad), 0.f, Dist * FMath::Sin(PitchRad));
-	CameraBaseRotation = FRotator(-CameraPitch, 0.f, 0.f);
-	Camera->SetRelativeLocation(CameraBaseLocation);
-	Camera->SetRelativeRotation(CameraBaseRotation);
+	// Camera: looking down at the dial from the "6 o'clock" side (the close-up; see SetCameraBase).
+	SetCameraBase(0.f);
 	Camera->SetFieldOfView(CameraFOV);
 
 	// Fill light so the scene is visible even in an unlit level.
@@ -434,6 +530,13 @@ void ASpinClock::Tick(float DeltaSeconds)
 
 	UpdateObstacles(DeltaSeconds);
 	UpdateSparks(DeltaSeconds);
+
+	// The camera pulls back toward the skyline as the city lights up, eased at both ends.
+	if (bCameraFollowsReveal)
+	{
+		SetCameraBase(GetRevealCameraBlend(*this));
+	}
+
 	UpdateShake(DeltaSeconds);
 }
 
@@ -939,6 +1042,22 @@ bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh) const
 	}
 
 	return false;
+}
+
+void ASpinClock::SetCameraBase(float Blend)
+{
+	const float Pitch = FMath::Lerp(CameraPitch, RevealedCameraPitch, Blend);
+	const float Dist = DialRadius * FMath::Lerp(CameraDistanceFactor, RevealedCameraDistanceFactor, Blend);
+	const float PitchRad = FMath::DegreesToRadians(Pitch);
+	CameraBaseLocation = FVector(-Dist * FMath::Cos(PitchRad), 0.f, Dist * FMath::Sin(PitchRad));
+	CameraBaseRotation = FRotator(-(Pitch - RevealedCameraLookUp * Blend), 0.f, 0.f);
+
+	// While shaking, UpdateShake places the camera around this base instead.
+	if (ShakeAmount <= 0.f)
+	{
+		Camera->SetRelativeLocation(CameraBaseLocation);
+		Camera->SetRelativeRotation(CameraBaseRotation);
+	}
 }
 
 void ASpinClock::PlayShake(float Intensity)

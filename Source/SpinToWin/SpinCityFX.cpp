@@ -2,14 +2,29 @@
 
 #include "SpinCityFX.h"
 #include "SpinGameMode.h"
+#include "SpinClock.h"
+#include "SpinCityBuilder.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMaterialLibrary.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
 	const FName IntensityParam(TEXT("Intensity"));
+
+	// MPC_CityReveal's parameters, read by M_Neon. Neon is fully lit up to (RevealRadius - RevealEdge)
+	// from RevealCenter, fades to RevealFloor by RevealRadius, and RevealFrontBoost brightens the fade band.
+	const FName RevealCenterParam(TEXT("RevealCenter"));
+	const FName RevealRadiusParam(TEXT("RevealRadius"));
+	const FName RevealEdgeParam(TEXT("RevealEdge"));
+	const FName RevealFloorParam(TEXT("RevealFloor"));
+	const FName RevealFrontBoostParam(TEXT("RevealFrontBoost"));
 }
 
 ASpinCityFX::ASpinCityFX()
@@ -18,6 +33,9 @@ ASpinCityFX::ASpinCityFX()
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
+
+	static ConstructorHelpers::FObjectFinder<UMaterialParameterCollection> RevealFinder(TEXT("/Game/Materials/Neon/MPC_CityReveal.MPC_CityReveal"));
+	RevealCollection = RevealFinder.Succeeded() ? RevealFinder.Object : nullptr;
 }
 
 void ASpinCityFX::BeginPlay()
@@ -30,6 +48,7 @@ void ASpinCityFX::BeginPlay()
 	SetupGridMIDs();
 	SetupTraceChains();
 	SetupFlickerNodes();
+	MeasureCityExtent();
 }
 
 void ASpinCityFX::Tick(float DeltaSeconds)
@@ -39,6 +58,7 @@ void ASpinCityFX::Tick(float DeltaSeconds)
 	UpdateGrid(DeltaSeconds);
 	UpdateTraces();
 	UpdateFlickerNodes();
+	UpdateReveal(DeltaSeconds);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -252,4 +272,135 @@ void ASpinCityFX::UpdateFlickerNodes()
 		const float Base = (Node.FlashEndTime > 0.f) ? NodeBrightIntensity : NodeDimIntensity;
 		Node.MID->SetScalarParameterValue(IntensityParam, Base + PulseBoost);
 	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// City reveal: the lit area grows out from the dial as the run progresses.
+// ---------------------------------------------------------------------------------------------
+
+void ASpinCityFX::MeasureCityExtent()
+{
+	// The farthest corner of any placed mesh, measured flat (XY) from the dial's centre at the origin.
+	// Anything absurdly large (a leftover sky sphere, say) is skipped so it can't stretch the reveal.
+	float Farthest = 0.f;
+	for (TActorIterator<AStaticMeshActor> It(GetWorld()); It; ++It)
+	{
+		FVector Origin, Extent;
+		It->GetActorBounds(false, Origin, Extent);
+		if (Extent.GetMax() > 100000.f)
+		{
+			continue;
+		}
+		const float CornerDist = FVector2D(FMath::Abs(Origin.X) + Extent.X, FMath::Abs(Origin.Y) + Extent.Y).Size();
+		Farthest = FMath::Max(Farthest, CornerDist);
+	}
+	// The procedural city, if there is one.
+	for (TActorIterator<ASpinCityBuilder> It(GetWorld()); It; ++It)
+	{
+		Farthest = FMath::Max(Farthest, It->GetCityRadius());
+	}
+
+	if (Farthest > 0.f)
+	{
+		CityExtent = Farthest;
+	}
+}
+
+float ASpinCityFX::GetRevealFraction() const
+{
+	if (!bRevealEnabled || !RevealCollection)
+	{
+		return 1.f;
+	}
+	const float Span = FMath::Max(1.f, CityExtent - RevealStartRadius);
+	return FMath::Clamp((CurrentRevealRadius - RevealStartRadius) / Span, 0.f, 1.f);
+}
+
+float ASpinCityFX::GetRevealProgress() const
+{
+	const ASpinGameMode* GM = GameMode.Get();
+	if (!GM)
+	{
+		return -1.f;
+	}
+
+	switch (GM->State)
+	{
+	case ESpinState::Playing:
+	case ESpinState::GameOver: // stays where the run got to, so you can see how far you made it
+	case ESpinState::NewButtonIntro:
+	case ESpinState::ObstacleIntro:
+	case ESpinState::JamIntro:
+	case ESpinState::HighObstacleIntro:
+	case ESpinState::TutorialIntro:
+	case ESpinState::EndlessIntro:
+		break;
+	default:
+		return -1.f; // a menu
+	}
+
+	if (GM->IsTutorial())
+	{
+		// The tutorial lights up a small part of the city, a step per tutorial level and a little per hit.
+		const int32 NumLevels = FMath::Max(1, GM->TutorialLevels.Num());
+		const FTutorialLevel* Level = GM->GetTutorialLevel();
+		const float Within = Level ? FMath::Clamp(static_cast<float>(GM->TutorialHits) / FMath::Max(1, Level->Hits), 0.f, 1.f) : 0.f;
+		return TutorialRevealShare * (GM->TutorialIndex + Within) / NumLevels;
+	}
+
+	// Endless: a step per level, plus the hits made into the current one, so every hit pushes it out a bit.
+	const int32 Level = GM->GetLevel();
+	const int32 LevelHits = FMath::Max(1, GM->GetHitsForLevel(Level));
+	const int32 LevelStart = GM->GetLevelTarget() - LevelHits;
+	const float Within = FMath::Clamp(static_cast<float>(GM->Hits - LevelStart) / LevelHits, 0.f, 1.f);
+	return FMath::Clamp((Level - 1 + Within) / (RevealFullLevel - 1.f), 0.f, 1.f);
+}
+
+void ASpinCityFX::UpdateReveal(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	if (!RevealCollection || !World)
+	{
+		return;
+	}
+
+	const float Progress = bRevealEnabled ? GetRevealProgress() : 1.f;
+	const bool bOnMenu = Progress < 0.f;
+
+	float TargetRadius;
+	float Edge;
+	if (bOnMenu)
+	{
+		TargetRadius = bFullCityOnMenus ? CityExtent : RevealStartRadius;
+		Edge = RevealEdgeFull;
+	}
+	else
+	{
+		TargetRadius = FMath::Lerp(RevealStartRadius, CityExtent, Progress);
+		Edge = FMath::Lerp(RevealEdgeStart, RevealEdgeFull, Progress);
+	}
+
+	if (CurrentRevealRadius < 0.f)
+	{
+		CurrentRevealRadius = TargetRadius; // first frame: no sweep from nothing
+	}
+
+	// Spreading out during a run is slow so it visibly creeps; powering down for a new run, or
+	// lighting back up behind the menus, is quick.
+	const bool bGrowing = TargetRadius > CurrentRevealRadius;
+	const float Speed = (bGrowing && !bOnMenu) ? RevealSpreadSpeed : RevealCollapseSpeed;
+	CurrentRevealRadius = FMath::FInterpConstantTo(CurrentRevealRadius, TargetRadius, DeltaSeconds, Speed);
+
+	// The leading edge glows extra while it's still travelling outward, then settles.
+	const float Travel = bGrowing ? FMath::Clamp((TargetRadius - CurrentRevealRadius) / FMath::Max(1.f, Edge * 0.5f), 0.f, 1.f) : 0.f;
+
+	const ASpinGameMode* GM = GameMode.Get();
+	const ASpinClock* Clock = GM ? GM->GetClock() : nullptr;
+	const FVector Center = Clock ? Clock->GetActorLocation() : FVector::ZeroVector;
+
+	UKismetMaterialLibrary::SetVectorParameterValue(World, RevealCollection, RevealCenterParam, FLinearColor(Center.X, Center.Y, 0.f, 0.f));
+	UKismetMaterialLibrary::SetScalarParameterValue(World, RevealCollection, RevealRadiusParam, CurrentRevealRadius + Edge);
+	UKismetMaterialLibrary::SetScalarParameterValue(World, RevealCollection, RevealEdgeParam, Edge);
+	UKismetMaterialLibrary::SetScalarParameterValue(World, RevealCollection, RevealFloorParam, RevealFloor);
+	UKismetMaterialLibrary::SetScalarParameterValue(World, RevealCollection, RevealFrontBoostParam, RevealFrontBoost * Travel);
 }
