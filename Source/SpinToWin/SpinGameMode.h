@@ -549,7 +549,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0"))
 	float LiftPointsPerSecond = 50.f;
 
-	/** Lives the player starts a run with. */
+	/** Lives the player starts a run with. Losing them all costs a miss and fills them back up. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "1"))
 	int32 MaxLives = 5;
 
@@ -560,7 +560,7 @@ public:
 	// ---------------- Misses (Endless) ----------------
 
 	/** Separate lives for missed target zones (and wrong presses, and broken hands). Endless only -
-	 *  the tutorial can never be failed. Once these run out, the run ends. */
+	 *  the tutorial can never be failed. Running out of lives costs one too. Once these run out, the run ends. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Misses", meta = (ClampMin = "1"))
 	int32 MaxMissLives = 3;
 
@@ -613,6 +613,10 @@ public:
 	 *  trigger it. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
 	float InvincibilityDuration = 5.f;
+
+	/** Seconds of countdown after unpausing, with the run held still, before play picks back up. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
+	float ResumeCountdownDuration = 5.f;
 
 	// ---------------- Feel (camera shake strength, 0..1) ----------------
 
@@ -799,7 +803,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float LifeGainedTime = -1000.f;
 
-	/** True if the run ended because the player ran out of lives. */
+	/** True if the run ended on a post: it took the last life, and that cost the last miss. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	bool bOutOfLives = false;
 
@@ -829,9 +833,13 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float InvincibleTimeRemaining = 0.f;
 
-	/** World time the last invincibility window ran out, used for the HUD's "GO!". */
+	/** World time the last invincibility window or resume countdown ran out, used for the HUD's "GO!". */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float InvincibilityEndTime = -1000.f;
+
+	/** Seconds left in the countdown after unpausing, or 0. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float ResumeTimeRemaining = 0.f;
 
 	/** World time of the last successful hit (Endless or tutorial), used for the light pulse. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -881,8 +889,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
 	int32 ResolutionIndex = 2;
 
-	/** Master volume, 0-100. Applies immediately but isn't saved between sessions - there's no
-	 *  audio content in the project yet for a saved value to matter to. */
+	/** Master volume, 0-100. Applies immediately, and is saved with the profiles. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|Settings")
 	int32 VolumePercent = 100;
 
@@ -1017,6 +1024,12 @@ public:
 	 *  UGameplayStatics::SetGamePaused), so the hand, timers and effects all freeze. */
 	bool IsPauseMenuOpen() const;
 
+	/** True during the countdown after unpausing, while the run holds still (see ResumeTimeRemaining). */
+	bool IsResumeCountingDown() const;
+
+	/** True during a run, explanation screens included - anything but the menus and game over. */
+	bool IsInRun() const;
+
 	/** The in-world dial, spawned when play starts. */
 	ASpinClock* GetClock() const;
 
@@ -1053,8 +1066,8 @@ private:
 	int32 GetUnlockedBonuses() const;
 	void OnHit();
 	void OnZoneMissed();
-	/** A life-costing mistake: spends a life from the right pool, then either ends the run or
-	 *  carries straight on (with the invincibility countdown, unless it was an obstacle hit). */
+	/** A life-costing mistake: spends from the right pool (obstacle lives roll over into misses), then either ends the run or
+	 *  carries straight on (with the invincibility countdown, if it cost a miss). */
 	void Fail(ESpinMistake Mistake);
 	void EndGame();
 	void ResumeAfterIntro();
@@ -1085,6 +1098,7 @@ private:
 	void ApplyQuality();
 	void ApplyResolution();
 	void ApplyVolume();
+	void SaveVolume();
 
 	// Tutorial
 	void StartTutorial();

@@ -101,6 +101,10 @@ public:
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 ActiveProfile = INDEX_NONE;
 
+	/** Settings choice: master volume, 0-100. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 VolumePercent = 100;
+
 	/** Settings choice: gamepad prompts show PlayStation names instead of Xbox ones. */
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	bool bPlayStationIcons = false;

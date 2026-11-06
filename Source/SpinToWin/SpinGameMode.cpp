@@ -256,6 +256,22 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// Just unpaused: everything holds still until the countdown runs out, then picks up exactly
+	// where it stopped - so pausing never gets anyone out of trouble.
+	if (IsResumeCountingDown())
+	{
+		ResumeTimeRemaining -= DeltaSeconds;
+		if (ResumeTimeRemaining <= 0.f)
+		{
+			ResumeTimeRemaining = 0.f;
+			if (!bInvincible && GetWorld())
+			{
+				InvincibilityEndTime = GetWorld()->GetTimeSeconds(); // the HUD's "GO!"
+			}
+		}
+		return;
+	}
+
 	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * Dt + 360.f, 360.f);
 
 	// Endless: a lifted hand costs points for as long as it's up. Fractions carry over between
@@ -450,7 +466,8 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 	case ESpinState::Playing:
 		// Invincibility window after losing a life: nothing can be hit and
 		// nothing can go wrong, so presses are completely ignored until the timer runs out.
-		if (bInvincible)
+		// The same goes for the countdown after unpausing.
+		if (bInvincible || IsResumeCountingDown())
 		{
 			break;
 		}
@@ -550,7 +567,7 @@ void ASpinGameMode::HandleRepairPressed()
 	{
 	case ESpinState::Playing:
 		// Only does anything while the hand is jammed; any other time it's harmlessly ignored.
-		if (!bInvincible && JamPhase == EJamPhase::Jammed)
+		if (!bInvincible && !IsResumeCountingDown() && JamPhase == EJamPhase::Jammed)
 		{
 			RegisterJamPress();
 		}
@@ -622,17 +639,18 @@ void ASpinGameMode::OnObstacleCleared()
 	}
 	++ObstaclesCleared;
 
-	// Every few posts cleared earn a life back. The count carries on with full lives too.
+	// Every few posts cleared earn a life back. Nothing builds up while lives are full.
+	if (Lives >= GetRunMaxLives())
+	{
+		return;
+	}
 	if (++ObstacleLifeProgress >= ObstaclesPerLife)
 	{
 		ObstacleLifeProgress = 0;
-		if (Lives < GetRunMaxLives())
+		++Lives;
+		if (GetWorld())
 		{
-			++Lives;
-			if (GetWorld())
-			{
-				LifeGainedTime = GetWorld()->GetTimeSeconds();
-			}
+			LifeGainedTime = GetWorld()->GetTimeSeconds();
 		}
 	}
 }
@@ -842,6 +860,8 @@ void ASpinGameMode::LoadSaveData()
 	}
 	bPlayStationIcons = SaveData && SaveData->bPlayStationIcons;
 	SelectedModifiers = SaveData ? SaveData->SelectedModifiers : 0;
+	VolumePercent = SaveData ? SaveData->VolumePercent : 100;
+	ApplyVolume();
 }
 
 void ASpinGameMode::RecordRun()
@@ -1679,29 +1699,20 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 		bSecondWindUsed = true;
 	}
 
-	// Obstacle hits spend the regenerating "Lives" pool; everything else spends the
-	// non-regenerating "MissLives" pool. Either way, running out ends the run - otherwise play
-	// carries straight on at the current level/score.
-	if (bSecondWind)
-	{
-		// Nothing to spend.
-	}
-	else if (Mistake == ESpinMistake::HitObstacle)
+	// Obstacle hits spend the regenerating "Lives" pool. Running that out costs a miss and fills it
+	// back up, so only the "MissLives" pool, which everything else spends, can end the run.
+	bool bLivesRanOut = false;
+	if (!bSecondWind && Mistake == ESpinMistake::HitObstacle)
 	{
 		Lives = FMath::Max(0, Lives - 1);
 		if (GetWorld())
 		{
 			LifeLostTime = GetWorld()->GetTimeSeconds();
 		}
-
-		if (Lives <= 0)
-		{
-			bOutOfLives = true;
-			EndGame();
-			return;
-		}
+		bLivesRanOut = Lives <= 0;
 	}
-	else
+
+	if (bLivesRanOut || (!bSecondWind && Mistake != ESpinMistake::HitObstacle))
 	{
 		MissLives = FMath::Max(0, MissLives - 1);
 		if (GetWorld())
@@ -1711,13 +1722,19 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 
 		if (MissLives <= 0)
 		{
-			bOutOfMissLives = true;
+			(bLivesRanOut ? bOutOfLives : bOutOfMissLives) = true;
 			if (Mistake == ESpinMistake::HandBroke)
 			{
 				bHandBroke = true;
 			}
 			EndGame();
 			return;
+		}
+
+		if (bLivesRanOut)
+		{
+			Lives = GetRunMaxLives();
+			ObstacleLifeProgress = 0;
 		}
 
 		// The jam that broke the hand is fixed on the spot - the player is not left looking at a
@@ -1727,8 +1744,8 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 			ResetJam();
 		}
 
-		// No pause: straight into the invincibility countdown to get back in rhythm. Obstacle hits
-		// skip this - the obstacle is cleared below and play simply carries on.
+		// No pause: straight into the invincibility countdown to get back in rhythm. An obstacle hit
+		// that only spent a life skips this - the obstacle is cleared below and play simply carries on.
 		bInvincible = true;
 		InvincibleTimeRemaining = GetRunInvincibilityDuration();
 		InvincibilityEndTime = -1000.f;
@@ -1740,6 +1757,7 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 	case ESpinMistake::WrongButton: ShowNotice(TEXT("Wrong button, or too early!")); break;
 	case ESpinMistake::HitObstacle:
 		ShowNotice(bSecondWind ? TEXT("SECOND WIND - that hit was free!")
+			: bLivesRanOut ? TEXT("Out of lives - that cost a miss!")
 			: bLastObstacleHigh ? TEXT("Don't lift under a purple post!")
 			: TEXT("You hit an obstacle!"));
 		break;
@@ -1964,12 +1982,14 @@ void ASpinGameMode::RespawnObstacleForCurrentZone()
 void ASpinGameMode::ReturnToTitle()
 {
 	State = ESpinState::WaitingToStart;
+	ResumeTimeRemaining = 0.f;
 	bInvincible = false;
 	InvincibilityEndTime = -1000.f;
 	bHandBroke = false;
 	ResetJam();
 	if (Clock)
 	{
+		Clock->SetMusicDucked(false);
 		Clock->RetireObstacles();
 		Clock->SetLiftHeld(false, false);
 	}
@@ -2196,11 +2216,13 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 	case EMenuAction::VolumeDown:
 		VolumePercent = FMath::Clamp(VolumePercent - 10, 0, 100);
 		ApplyVolume();
+		SaveVolume();
 		break;
 
 	case EMenuAction::VolumeUp:
 		VolumePercent = FMath::Clamp(VolumePercent + 10, 0, 100);
 		ApplyVolume();
+		SaveVolume();
 		break;
 
 	case EMenuAction::ToggleControllerIcons:
@@ -2246,10 +2268,12 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		{
 			UGameplayStatics::SetGamePaused(this, false);
 			// Clear what the abandoned run left on the dial before the new one starts.
+			ResumeTimeRemaining = 0.f;
 			bInvincible = false;
 			InvincibilityEndTime = -1000.f;
 			if (Clock)
 			{
+				Clock->StartNextRunTrack();
 				Clock->RetireObstacles();
 				Clock->SetLiftHeld(false, false);
 			}
@@ -2338,6 +2362,15 @@ void ASpinGameMode::ApplyVolume()
 		{
 			AudioDevice->SetTransientPrimaryVolume(VolumePercent / 100.f);
 		}
+	}
+}
+
+void ASpinGameMode::SaveVolume()
+{
+	if (SaveData)
+	{
+		SaveData->VolumePercent = VolumePercent;
+		WriteSaveData();
 	}
 }
 
@@ -2430,12 +2463,42 @@ void ASpinGameMode::TogglePauseMenu()
 		// would otherwise still be up (and costing points) after resuming.
 		Clock->SetLiftHeld(false, false);
 	}
+	if (Clock)
+	{
+		Clock->SetMusicDucked(bPause);
+	}
+	if (!bPause)
+	{
+		ResumeTimeRemaining = ResumeCountdownDuration;
+	}
 	UGameplayStatics::SetGamePaused(this, bPause);
 }
 
 bool ASpinGameMode::IsPauseMenuOpen() const
 {
 	return State == ESpinState::Playing && UGameplayStatics::IsGamePaused(this);
+}
+
+bool ASpinGameMode::IsResumeCountingDown() const
+{
+	return ResumeTimeRemaining > 0.f;
+}
+
+bool ASpinGameMode::IsInRun() const
+{
+	switch (State)
+	{
+	case ESpinState::Playing:
+	case ESpinState::NewButtonIntro:
+	case ESpinState::ObstacleIntro:
+	case ESpinState::JamIntro:
+	case ESpinState::HighObstacleIntro:
+	case ESpinState::TutorialIntro:
+	case ESpinState::EndlessIntro:
+		return true;
+	default:
+		return false;
+	}
 }
 
 FString ASpinGameMode::ExpandKeys(const FString& Text) const

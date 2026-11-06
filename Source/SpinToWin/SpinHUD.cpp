@@ -204,7 +204,8 @@ void ASpinHUD::DrawHUD()
 		{
 			Lines.Add({ FString::Printf(TEXT("+1 miss back every %d levels."), GM->MissRegenLevels), TextDim });
 		}
-		Lines.Add({ TEXT("Run out of either and it's game over."), TextDim });
+		Lines.Add({ TEXT("Lose every life: -1 miss, and your lives refill."), TextDim });
+		Lines.Add({ TEXT("Run out of misses and it's game over."), TextDim });
 		DrawBriefing(TEXT("TUTORIAL COMPLETE"), FString::Printf(TEXT("ENDLESS - LEVEL %d"), GM->GetLevel()),
 			Lines, TEXT("Press"), KeyHintOf(*GM, 0), KeyColorOf(*GM, 0));
 		break;
@@ -598,8 +599,12 @@ void ASpinHUD::DrawRunHUD(const ASpinGameMode& GM)
 	DrawCallout(GM, CX, U(196.f));
 	DrawHitPopup(GM, CX, CY - U(150.f));
 
-	// Invincibility countdown, then "GO!" (obstacle hits don't start one).
-	if (GM.bInvincible)
+	// The countdown after unpausing, or the invincibility one, then "GO!" (obstacle hits don't start one).
+	if (GM.IsResumeCountingDown())
+	{
+		DrawInvincibilityCountdown(GM.ResumeTimeRemaining, CX, CY);
+	}
+	else if (GM.bInvincible)
 	{
 		DrawInvincibilityCountdown(GM.InvincibleTimeRemaining, CX, CY);
 	}
@@ -865,6 +870,7 @@ void ASpinHUD::DrawHealthColumns(const ASpinGameMode& GM)
 	{
 		// How close the next life is: posts cleared out of the ObstaclesPerLife needed.
 		const FString LivesSub = GM.IsTutorial() ? FString(TEXT("PRACTICE"))
+			: GM.Lives >= GM.GetRunMaxLives() ? FString(TEXT("FULL"))
 			: FString::Printf(TEXT("%d/%d TO +1"), GM.ObstacleLifeProgress, GM.ObstaclesPerLife);
 		DrawColumn(DialLeft - RimGap - W, TEXT("LIVES"), *LivesSub,
 			GM.Lives, GM.GetRunMaxLives(), Red, GM.LifeLostTime, GM.LifeGainedTime);

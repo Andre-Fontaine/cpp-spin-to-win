@@ -5,12 +5,14 @@
 #include "SpinCityFX.h"
 #include "SpinCityBuilder.h"
 #include "Camera/CameraComponent.h"
+#include "Components/AudioComponent.h"
 #include "EngineUtils.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
@@ -200,6 +202,19 @@ ASpinClock::ASpinClock()
 		SparkMeshes.Add(Spark);
 	}
 	Sparks.SetNum(NumSparks);
+
+	// Music: flat 2D stereo, started by UpdateMusic. Counting as UI sound keeps it going through a pause.
+	auto MakeMusicPlayer = [this](FName Name) -> UAudioComponent*
+	{
+		UAudioComponent* Player = CreateDefaultSubobject<UAudioComponent>(Name);
+		Player->SetupAttachment(Root);
+		Player->bAutoActivate = false;
+		Player->bAllowSpatialization = false;
+		Player->bIsUISound = true;
+		return Player;
+	};
+	MenuMusicPlayer = MakeMusicPlayer(TEXT("MenuMusicPlayer"));
+	RunMusicPlayer = MakeMusicPlayer(TEXT("RunMusicPlayer"));
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(Root);
@@ -522,22 +537,97 @@ void ASpinClock::Tick(float DeltaSeconds)
 		HandPivot->SetRelativeRotation(HandRotation);
 		HandPivot->SetRelativeLocation(FVector(0.f, 0.f, HandLift));
 
-		InvincibleDim = FMath::FInterpConstantTo(InvincibleDim, GM->bInvincible ? 1.f : 0.f, DeltaSeconds, 1.f / InvincibleFadeTime);
+		InvincibleDim = FMath::FInterpConstantTo(InvincibleDim, (GM->bInvincible || GM->IsResumeCountingDown()) ? 1.f : 0.f, DeltaSeconds, 1.f / InvincibleFadeTime);
 
 		UpdateZone(*GM);
 		UpdateColors(*GM);
+		UpdateMusic(*GM);
 	}
 
 	UpdateObstacles(DeltaSeconds);
 	UpdateSparks(DeltaSeconds);
 
-	// The camera pulls back toward the skyline as the city lights up, eased at both ends.
+	// The camera pulls back toward the skyline as the city lights up. The light moves in stops and
+	// starts (it chases each hit), so the camera follows on a spring rather than copying it.
 	if (bCameraFollowsReveal)
 	{
-		SetCameraBase(GetRevealCameraBlend(*this));
+		const float TargetBlend = GetRevealCameraBlend(*this);
+		if (CameraBlend < 0.f)
+		{
+			CameraBlend = TargetBlend; // first frame: no sweep from nothing
+		}
+		const float SmoothTime = TargetBlend < CameraBlend ? CameraReturnSmoothTime : CameraRiseSmoothTime;
+		FMath::CriticallyDampedSmoothing(CameraBlend, CameraBlendRate, TargetBlend, 0.f, DeltaSeconds, SmoothTime);
+		SetCameraBase(CameraBlend);
 	}
 
-	UpdateShake(DeltaSeconds);
+	UpdateCameraMotion(DeltaSeconds);
+}
+
+void ASpinClock::UpdateMusic(const ASpinGameMode& GM)
+{
+	const bool bGameOver = GM.State == ESpinState::GameOver;
+	if (bGameOver && !bWasGameOver && GameOverSting)
+	{
+		UGameplayStatics::PlaySound2D(this, GameOverSting);
+	}
+	bWasGameOver = bGameOver;
+
+	UAudioComponent* Wanted = GM.IsInRun() ? RunMusicPlayer : MenuMusicPlayer;
+	if (Wanted == ActiveMusicPlayer)
+	{
+		// A run track without Looping has finished: on to another.
+		if (Wanted == RunMusicPlayer && !Wanted->IsPlaying())
+		{
+			StartNextRunTrack();
+		}
+		return;
+	}
+
+	if (ActiveMusicPlayer)
+	{
+		ActiveMusicPlayer->FadeOut(MusicFadeTime, 0.f);
+	}
+	ActiveMusicPlayer = Wanted;
+	if (Wanted == RunMusicPlayer)
+	{
+		StartNextRunTrack();
+	}
+	else if (MenuMusic)
+	{
+		Wanted->SetSound(MenuMusic);
+		Wanted->FadeIn(MusicFadeTime);
+	}
+}
+
+void ASpinClock::StartNextRunTrack()
+{
+	// Plain FMath rather than the run's random stream, so the music can't change the daily's rolls.
+	TArray<USoundBase*> Choices;
+	for (USoundBase* Track : RunMusic)
+	{
+		if (Track && Track != LastRunTrack)
+		{
+			Choices.Add(Track);
+		}
+	}
+
+	// With a single track there's nothing else to pick, so it just plays again.
+	USoundBase* Track = Choices.Num() > 0 ? Choices[FMath::RandHelper(Choices.Num())] : LastRunTrack.Get();
+	if (Track)
+	{
+		LastRunTrack = Track;
+		RunMusicPlayer->SetSound(Track);
+		RunMusicPlayer->FadeIn(MusicFadeTime);
+	}
+}
+
+void ASpinClock::SetMusicDucked(bool bDucked)
+{
+	if (ActiveMusicPlayer && ActiveMusicPlayer->IsPlaying())
+	{
+		ActiveMusicPlayer->AdjustVolume(0.25f, bDucked ? MusicPauseVolume : 1.f);
+	}
 }
 
 void ASpinClock::SetSparking(bool bNewSparking)
@@ -1052,12 +1142,9 @@ void ASpinClock::SetCameraBase(float Blend)
 	CameraBaseLocation = FVector(-Dist * FMath::Cos(PitchRad), 0.f, Dist * FMath::Sin(PitchRad));
 	CameraBaseRotation = FRotator(-(Pitch - RevealedCameraLookUp * Blend), 0.f, 0.f);
 
-	// While shaking, UpdateShake places the camera around this base instead.
-	if (ShakeAmount <= 0.f)
-	{
-		Camera->SetRelativeLocation(CameraBaseLocation);
-		Camera->SetRelativeRotation(CameraBaseRotation);
-	}
+	// In play, UpdateCameraMotion then places the camera around this base.
+	Camera->SetRelativeLocation(CameraBaseLocation);
+	Camera->SetRelativeRotation(CameraBaseRotation);
 }
 
 void ASpinClock::PlayShake(float Intensity)
@@ -1065,30 +1152,29 @@ void ASpinClock::PlayShake(float Intensity)
 	ShakeAmount = FMath::Max(ShakeAmount, FMath::Clamp(Intensity, 0.f, 1.f));
 }
 
-void ASpinClock::UpdateShake(float DeltaSeconds)
+void ASpinClock::UpdateCameraMotion(float DeltaSeconds)
 {
-	if (ShakeAmount <= 0.f)
+	// The idle sway: two slow waves per axis at unrelated speeds, so the drift never visibly repeats.
+	SwayTime += DeltaSeconds * CameraSwaySpeed;
+	auto Sway = [this](float Phase) -> float
 	{
-		return;
-	}
+		return 0.6f * FMath::Sin(SwayTime * 0.7f + Phase) + 0.4f * FMath::Sin(SwayTime * 1.13f + Phase * 2.3f);
+	};
+	FVector Offset(Sway(0.f), Sway(1.7f), Sway(3.1f));
+	Offset *= CameraSwayOffset;
+	FRotator Tilt(Sway(4.3f) * CameraSwayTilt, Sway(5.9f) * CameraSwayTilt, Sway(7.2f) * CameraSwayTilt * 0.5f);
 
 	ShakeAmount = FMath::Max(0.f, ShakeAmount - ShakeDecayPerSecond * DeltaSeconds);
-
-	if (ShakeAmount <= 0.f)
+	if (ShakeAmount > 0.f)
 	{
-		// Shake finished: put the camera exactly back where it belongs.
-		Camera->SetRelativeLocation(CameraBaseLocation);
-		Camera->SetRelativeRotation(CameraBaseRotation);
-		return;
+		// Squared falloff so the shake snaps hard and settles smoothly.
+		const float Mag = ShakeAmount * ShakeAmount * MaxShakeOffset;
+		Offset += FVector(0.f, FMath::FRandRange(-Mag, Mag), FMath::FRandRange(-Mag, Mag));
+		Tilt += FRotator(
+			FMath::FRandRange(-Mag, Mag) * 0.08f,
+			FMath::FRandRange(-Mag, Mag) * 0.08f,
+			FMath::FRandRange(-Mag, Mag) * 0.08f);
 	}
-
-	// Squared falloff so the shake snaps hard and settles smoothly.
-	const float Mag = ShakeAmount * ShakeAmount * MaxShakeOffset;
-	const FVector Offset(0.f, FMath::FRandRange(-Mag, Mag), FMath::FRandRange(-Mag, Mag));
-	const FRotator Tilt(
-		FMath::FRandRange(-Mag, Mag) * 0.08f,
-		FMath::FRandRange(-Mag, Mag) * 0.08f,
-		FMath::FRandRange(-Mag, Mag) * 0.08f);
 
 	Camera->SetRelativeLocation(CameraBaseLocation + Offset);
 	Camera->SetRelativeRotation(CameraBaseRotation + Tilt);

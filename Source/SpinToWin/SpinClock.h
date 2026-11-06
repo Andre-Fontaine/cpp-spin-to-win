@@ -12,7 +12,9 @@
 #include "GameFramework/Actor.h"
 #include "SpinClock.generated.h"
 
+class UAudioComponent;
 class UCameraComponent;
+class USoundBase;
 class UMaterialInstanceDynamic;
 class UMaterialInterface;
 class UPointLightComponent;
@@ -114,6 +116,36 @@ public:
 
 	/** A jammed hand tilts and turns orange-brown ("broken") while it keeps spinning. */
 	void SetJammed(bool bJammed);
+
+	// ---------------- Music ----------------
+
+	/** Dips the music while the pause menu is up (it keeps playing, unlike the paused world). */
+	void SetMusicDucked(bool bDucked);
+
+	/** Starts a different random track from RunMusic. */
+	void StartNextRunTrack();
+
+	/** Plays behind the menus and the game-over screen. Any empty slot just stays silent. Turn on
+	 *  Looping on the sound itself. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Music")
+	TObjectPtr<USoundBase> MenuMusic;
+
+	/** Played during a run, tutorial included: a random one each run, never the same one twice in a
+	 *  row. Leave Looping off on these, so a long run moves on to another when one ends. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Music")
+	TArray<TObjectPtr<USoundBase>> RunMusic;
+
+	/** Plays once when a run ends, over the crossfade back to the menu music. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Music")
+	TObjectPtr<USoundBase> GameOverSting;
+
+	/** Seconds to crossfade between the menu and run music. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Music", meta = (ClampMin = "0"))
+	float MusicFadeTime = 1.5f;
+
+	/** Music volume (0..1) while the pause menu is up. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Music", meta = (ClampMin = "0", ClampMax = "1"))
+	float MusicPauseVolume = 0.4f;
 
 	// ---------------- Layout ----------------
 
@@ -309,6 +341,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float RevealedCameraLookUp = 13.f;
 
+	/** Seconds the camera lags behind the city's light as it pulls back. Higher = floatier. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0.05"))
+	float CameraRiseSmoothTime = 1.8f;
+
+	/** The same for swooping back in when a run starts (quicker, so play is framed in time). */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0.05"))
+	float CameraReturnSmoothTime = 0.7f;
+
+	/** The camera is never quite still: it slowly drifts by up to this many world units... */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0"))
+	float CameraSwayOffset = 22.f;
+
+	/** ...and tilts by up to this many degrees. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0"))
+	float CameraSwayTilt = 0.25f;
+
+	/** How fast the sway drifts (1 = one slow wave about every 9 seconds). */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0"))
+	float CameraSwaySpeed = 1.f;
+
 	/** Biggest camera offset (world units) at full shake intensity. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float MaxShakeOffset = 91.f;
@@ -335,9 +387,12 @@ private:
 	void BuildVisuals();
 	void UpdateZone(const ASpinGameMode& GM);
 	void UpdateColors(const ASpinGameMode& GM);
+	void UpdateMusic(const ASpinGameMode& GM);
 	void UpdateObstacles(float DeltaSeconds);
 	void UpdateObstaclePassing(ASpinGameMode& GM, float Moved);
-	void UpdateShake(float DeltaSeconds);
+
+	/** Places the camera for this frame: its base, plus the idle sway and any shake. */
+	void UpdateCameraMotion(float DeltaSeconds);
 
 	/** Where the camera rests (before shake): 0 = the close-up from CameraPitch / CameraDistanceFactor,
 	 *  1 = the wide shot from the Revealed values. */
@@ -409,6 +464,16 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UCameraComponent> Camera;
+
+	UPROPERTY()
+	TObjectPtr<UAudioComponent> MenuMusicPlayer;
+
+	UPROPERTY()
+	TObjectPtr<UAudioComponent> RunMusicPlayer;
+
+	/** Whichever of the two is playing, or null before the first frame. */
+	UPROPERTY()
+	TObjectPtr<UAudioComponent> ActiveMusicPlayer;
 
 	UPROPERTY()
 	TObjectPtr<UPointLightComponent> FillLight;
@@ -495,6 +560,18 @@ private:
 
 	FVector CameraBaseLocation = FVector::ZeroVector;
 	FRotator CameraBaseRotation = FRotator::ZeroRotator;
+
+	/** The camera's smoothed place between close-up and wide shot, and its speed (see SetCameraBase). Below 0 = not started. */
+	float CameraBlend = -1.f;
+	float CameraBlendRate = 0.f;
+	float SwayTime = 0.f;
+
+	/** The track from RunMusic played last, so the next one can be a different one. */
+	UPROPERTY()
+	TObjectPtr<USoundBase> LastRunTrack;
+
+	/** The game was on its game-over screen last frame, to catch the moment a run ends. */
+	bool bWasGameOver = false;
 
 	bool bLiftHeld = false;
 	bool bLiftPressValid = false;

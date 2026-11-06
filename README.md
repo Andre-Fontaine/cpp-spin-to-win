@@ -22,7 +22,7 @@ On-screen button prompts follow whichever device you used last (keyboard or game
 ## Modes
 
 - **Tutorial** - 7 short, unfailable levels that introduce the zone, the second button, obstacles/the lift, and jams one at a time. Clearing the last one carries straight on into an Endless run at level 5 (after a quick screen explaining lives and misses), with jams already in play.
-- **Endless** - the real run. Before it starts you can switch on optional modifiers (Fast Hand, Tiny Zones, Wild Spin, Early Jams, One Life); each makes the run harder and multiplies every point scored, and boosted runs are tagged on the leaderboard. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life rather than ending the run outright - it only ends when you're out of lives. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
+- **Endless** - the real run. Before it starts you can switch on optional modifiers (Fast Hand, Tiny Zones, Wild Spin, Early Jams, One Life); each makes the run harder and multiplies every point scored, and boosted runs are tagged on the leaderboard. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life rather than ending the run outright - losing all your obstacle lives costs a miss and refills them, and the run only ends when you're out of misses. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
 - **Daily** - one run a day that is the same for everyone: a seed and a "twist" modifier picked from the date. Retry as often as you like; your best counts on a separate daily board that starts over each day.
 
 ## Status
@@ -46,6 +46,7 @@ Early prototype.
 - [x] End-of-run breakdown (longest combo, points lost to lifting, obstacles hit)
 - [x] Pause menu (resume, restart, main menu)
 - [x] High posts (from level 12): purple posts that float above the dial - pass under them, don't lift
+- [x] Music support: menu and run tracks with crossfades and a game-over sting, a random run track each run, and a saved volume setting (no tracks added yet)
 - [x] Unlockable bonuses earned through play, equipped into slots that open at levels 25 and 40; runs that use them are marked on the leaderboard
 - [x] A procedural neon city that lights up from the dial outward as the run goes on
 - [ ] Online leaderboard
