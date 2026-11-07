@@ -272,7 +272,9 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		return;
 	}
 
-	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * Dt + 360.f, 360.f);
+	// A jammed hand grinds along slowly, easing down when it jams and back up once it's fixed.
+	JamSpeedFactor = FMath::FInterpTo(JamSpeedFactor, JamPhase == EJamPhase::Jammed ? JamSlowdown : 1.f, Dt, 5.f);
+	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * JamSpeedFactor * Dt + 360.f, 360.f);
 
 	// Endless: a lifted hand costs points for as long as it's up. Fractions carry over between
 	// frames so the drain stays steady at any frame rate.
@@ -2469,7 +2471,9 @@ void ASpinGameMode::TogglePauseMenu()
 	}
 	if (!bPause)
 	{
-		ResumeTimeRemaining = ResumeCountdownDuration;
+		// Unpausing counts down before play resumes - unless the invincibility countdown was already
+		// running (it froze while paused and simply carries on), so two countdowns never stack up.
+		ResumeTimeRemaining = bInvincible ? 0.f : ResumeCountdownDuration;
 	}
 	UGameplayStatics::SetGamePaused(this, bPause);
 }

@@ -2,8 +2,8 @@
 //
 // Builds the whole city in code (in the editor too, so it can be seen while its settings are tuned)
 // from instanced engine cubes and cylinders: a dark floor, ring roads and avenues radiating from the
-// dial like a clock face, districts of towers that grow taller with distance, parks with neon trees
-// and fountains, street lamps, an elevated maglev ring, and a few enormous landmarks on the horizon.
+// dial like a clock face, districts of towers that grow taller with distance, open water around the dial
+// feeding a river under a suspension bridge, and enormous landmarks on the horizon.
 // Every glowing surface uses M_Neon, so the city reveal (see ASpinCityFX) lights it up from the dial
 // outward. Place one at the origin; change Seed for a different city.
 //
@@ -66,7 +66,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "City|Layout")
 	float PlazaRadius = 2600.f;
 
-	/** Nothing stands within this distance of the dial - no buildings, parks or flying-car lanes -
+	/** Nothing stands within this distance of the dial - no buildings or flying-car lanes -
 	 *  so the area around it stays open. (Only the flat floor markings and the river come closer.) */
 	UPROPERTY(EditAnywhere, Category = "City|Layout")
 	float DialClearRadius = 5000.f;
@@ -93,7 +93,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "City|Layout")
 	float RingRoadWidth = 700.f;
 
-	/** Size of one city block (one building or park per block at most). */
+	/** Size of one city block (one building per block at most). */
 	UPROPERTY(EditAnywhere, Category = "City|Layout", meta = (ClampMin = "200"))
 	float BlockSize = 1400.f;
 
@@ -124,35 +124,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "City|Layout")
 	float FloorRadius = 150000.f;
 
-	// ---------------- Parks, streets and transit ----------------
-
-	/** Chance an occupied block is a park (neon trees, sometimes a fountain) rather than a building. */
-	UPROPERTY(EditAnywhere, Category = "City|Parks", meta = (ClampMin = "0", ClampMax = "1"))
-	float ParkChance = 0.08f;
-
-	/** Chance a park has a fountain in the middle (ringed with trees). */
-	UPROPERTY(EditAnywhere, Category = "City|Parks", meta = (ClampMin = "0", ClampMax = "1"))
-	float FountainChance = 0.45f;
-
-	UPROPERTY(EditAnywhere, Category = "City|Parks")
-	FLinearColor FoliageColor = FLinearColor(0.2f, 1.f, 0.45f);
-
-	UPROPERTY(EditAnywhere, Category = "City|Parks")
-	FLinearColor WaterColor = FLinearColor(0.35f, 0.85f, 1.f);
+	// ---------------- Streets and transit ----------------
 
 	/** Street lamps line both sides of every avenue, this far apart (0 = none), out to StreetLampReach. */
-	UPROPERTY(EditAnywhere, Category = "City|Parks")
+	UPROPERTY(EditAnywhere, Category = "City|Transit")
 	float StreetLampSpacing = 0.f;
 
-	UPROPERTY(EditAnywhere, Category = "City|Parks")
+	UPROPERTY(EditAnywhere, Category = "City|Transit")
 	float StreetLampReach = 26000.f;
-
-	/** An elevated maglev ring on pillars, running above one of the ring roads (0 = none, 1 = the first). */
-	UPROPERTY(EditAnywhere, Category = "City|Parks", meta = (ClampMin = "0"))
-	int32 MaglevRingRoad = 2;
-
-	UPROPERTY(EditAnywhere, Category = "City|Parks")
-	float MaglevHeight = 1100.f;
 
 	// ---------------- Look ----------------
 
@@ -323,6 +302,102 @@ public:
 	UPROPERTY(EditAnywhere, Category = "City|Depth")
 	float DepthHazeIntensity = 5.f;
 
+	// ---------------- Night sky ----------------
+
+	/** A cloudy night sky over the city (M_NightSky): a purple city glow at the horizon, drifting
+	 *  clouds underlit by the neon, and a big moon with a thin holographic ring. */
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	bool bNightSky = true;
+
+	/** Where the moon is: degrees round from straight ahead (positive = to the right), and above the horizon. */
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	float MoonAzimuth = 20.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	float MoonElevation = 12.f;
+
+	/** The moon's radius, in degrees of sky. */
+	UPROPERTY(EditAnywhere, Category = "City|Sky", meta = (ClampMin = "0.2", ClampMax = "30"))
+	float MoonSize = 4.9f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	FLinearColor MoonColor = FLinearColor(2.6f, 2.4f, 2.9f);
+
+	/** The thin holographic ring around the moon (black = none). */
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	FLinearColor MoonRingColor = FLinearColor(0.2f, 1.2f, 1.4f);
+
+	/** How much of the sky is cloud (0 = overcast, 1 = clear). */
+	UPROPERTY(EditAnywhere, Category = "City|Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float CloudCover = 0.45f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Sky", meta = (ClampMin = "0", ClampMax = "1"))
+	float CloudOpacity = 0.9f;
+
+	/** How fast the clouds drift (1 = a slow crawl). */
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	float CloudSpeed = 1.f;
+
+	/** Clouds near the horizon glow this colour, lit from below by the city. */
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	FLinearColor CloudGlowColor = FLinearColor(0.4f, 0.09f, 0.5f);
+
+	UPROPERTY(EditAnywhere, Category = "City|Sky")
+	float SkyBrightness = 1.f;
+
+	// ---------------- Rolling fog ----------------
+
+	/** Soft banks of fog drifting between the buildings: a stack of wide translucent layers (M_Fog)
+	 *  whose patchy clouds roll along with the wind. They fade out near the camera and around the
+	 *  dial, and glow brighter as the city lights up. */
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	bool bFogLayers = true;
+
+	UPROPERTY(EditAnywhere, Category = "City|Fog", meta = (ClampMin = "0", ClampMax = "8"))
+	int32 NumFogLayers = 5;
+
+	/** Heights of the lowest and highest layers (the rest are spread between, closer together low down). */
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	float FogLowest = 180.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	float FogHighest = 2600.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	FLinearColor FogColor = FLinearColor(0.3f, 0.1f, 0.5f);
+
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	float FogBrightness = 3.f;
+
+	/** How thick the lowest layer is (0..1); higher layers are thinner, so the fog pools near the ground. */
+	UPROPERTY(EditAnywhere, Category = "City|Fog", meta = (ClampMin = "0", ClampMax = "1"))
+	float FogOpacity = 0.8f;
+
+	/** How patchy the fog is: higher leaves bigger gaps between the banks (0 = an even blanket). */
+	UPROPERTY(EditAnywhere, Category = "City|Fog", meta = (ClampMin = "0", ClampMax = "0.95"))
+	float FogPatchiness = 0.3f;
+
+	/** Size of the fog banks: smaller numbers make bigger, slower-looking clouds. */
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	float FogNoiseScale = 0.00018f;
+
+	/** How fast the fog drifts, as a share of WindSpeed (it rolls along in WindDirection). */
+	UPROPERTY(EditAnywhere, Category = "City|Fog")
+	float FogDriftShare = 0.7f;
+
+	// ---------------- Lake ----------------
+
+	/** The dial sits out on open water - the same dark mirror as the river - that covers the whole near
+	 *  side of the level, edge to edge, up to a straight shoreline just in front of the bridge. The city
+	 *  stands on the far shore, and the river flows out through the shoreline and under the bridge. */
+	UPROPERTY(EditAnywhere, Category = "City|Lake")
+	bool bLake = true;
+
+	/** How far in front of the bridge the shoreline runs (the river crosses this stretch of land before
+	 *  passing under the bridge). */
+	UPROPERTY(EditAnywhere, Category = "City|Lake", meta = (ClampMin = "0"))
+	float LakeEndsBeforeBridge = 900.f;
+
 	// ---------------- River and bridges ----------------
 
 	/** A river runs straight ahead from the plaza to the ziggurat, splitting the city in two, with a
@@ -374,17 +449,18 @@ public:
 	float BridgeRoadWidth = 700.f;
 
 private:
-	/** Neon colour slots: the five palette colours, then foliage and water. */
+	/** Neon colour slots: one per palette colour. */
 	static constexpr int32 NumPalette = 5;
-	static constexpr int32 FoliageSlot = 5;
-	static constexpr int32 WaterSlot = 6;
-	static constexpr int32 NumSlots = 7;
+	static constexpr int32 NumSlots = NumPalette;
 
 	/** Windows come in this many independently switched batches per colour (blue, amber). */
 	static constexpr int32 NumWindowGroups = 8;
 
 	/** Tower bodies are split into this many distance bands, each a step further into the haze. */
 	static constexpr int32 NumHullBands = 6;
+
+	/** Fog layer components made up front (NumFogLayers of them are used). */
+	static constexpr int32 MaxFogLayers = 8;
 
 	/** The box of air the motes drift through (they wrap around inside it). */
 	static constexpr float MoteFieldMinX = -3500.f;
@@ -440,12 +516,9 @@ private:
 	/** A framed neon sign filled with glyph-like strokes, flat against a wall. Center is on the wall's
 	 *  surface; FaceYaw points out of the wall (0 = +X). Long side vertical if Height > SignWidth. */
 	void AddSign(FRandomStream& Rand, int32 Slot, const FVector& Center, float FaceYaw, float SignWidth, float SignHeight, float Width);
-	void BuildPark(FRandomStream& Rand, const FVector2D& Pos, float Yaw, float Size);
-	void BuildTree(const FVector2D& Pos, float Height, float Width);
-	void BuildFountain(const FVector2D& Pos, float Radius, float Width, float Yaw);
 	void BuildStreetLamps();
-	void BuildMaglev();
 	void BuildLandmarks(FRandomStream& Rand);
+	void BuildFog();
 	void BuildRiver();
 	void BuildSuspensionBridge(float X);
 
@@ -461,6 +534,11 @@ private:
 
 	/** Far end of the river (it stops at the ziggurat's steps). */
 	float GetRiverEnd() const;
+
+	void BuildLake();
+
+	/** Where the shoreline runs across the level (X; 0 when there's no lake). */
+	float GetShoreX() const;
 
 	/** True if a footprint this big at this spot would stand in the river, on its banks, or on the
 	 *  approach to one of its bridges. */
@@ -482,8 +560,30 @@ private:
 	UPROPERTY()
 	TObjectPtr<UStaticMeshComponent> Water;
 
+	/** The open water around the dial, edge to edge up to the shoreline (a flat slab of the same water). */
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> LakeWater;
+
+	/** Height floor lines are drawn at: just above the floor, or above the lake's surface for the
+	 *  clock-face markings around the dial (so they float on the water). */
+	float FloorLineZ = 1.f;
+
 	UPROPERTY()
 	TObjectPtr<UMaterialInterface> WaterMaterial;
+
+	/** The rolling fog: flat layers stacked over the city (see NeonBoxes for why the list is Transient). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> FogLayers;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> FogMaterial;
+
+	/** A huge sphere around everything, wearing the night sky. */
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> SkyDome;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInterface> SkyMaterial;
 
 	/** Dark tower bodies, one component per haze band (see NeonBoxes for why these lists are Transient). */
 	UPROPERTY(Transient)

@@ -618,6 +618,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
 	float ResumeCountdownDuration = 5.f;
 
+	/** While the hand is jammed it turns at this share of its normal speed. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0.05", ClampMax = "1"))
+	float JamSlowdown = 0.35f;
+
 	// ---------------- Feel (camera shake strength, 0..1) ----------------
 
 	/** Small shake on every successful hit. */
@@ -863,6 +867,9 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	EJamPhase JamPhase = EJamPhase::None;
+
+	/** The hand's speed multiplier from jamming: eases toward JamSlowdown while jammed, back to 1 after. */
+	float JamSpeedFactor = 1.f;
 
 	/** Seconds spent in the current jam phase. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")

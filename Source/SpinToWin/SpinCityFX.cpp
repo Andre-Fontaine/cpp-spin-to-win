@@ -316,6 +316,15 @@ float ASpinCityFX::GetRevealFraction() const
 	return FMath::Clamp((CurrentRevealRadius - RevealStartRadius) / Span, 0.f, 1.f);
 }
 
+float ASpinCityFX::GetRevealOuterRadius() const
+{
+	if (!bRevealEnabled || !RevealCollection)
+	{
+		return CityExtent;
+	}
+	return FMath::Max(CurrentRevealRadius, 0.f) + CurrentRevealEdge;
+}
+
 float ASpinCityFX::GetRevealProgress() const
 {
 	const ASpinGameMode* GM = GameMode.Get();
@@ -390,6 +399,7 @@ void ASpinCityFX::UpdateReveal(float DeltaSeconds)
 	const bool bGrowing = TargetRadius > CurrentRevealRadius;
 	const float Speed = (bGrowing && !bOnMenu) ? RevealSpreadSpeed : RevealCollapseSpeed;
 	CurrentRevealRadius = FMath::FInterpConstantTo(CurrentRevealRadius, TargetRadius, DeltaSeconds, Speed);
+	CurrentRevealEdge = Edge;
 
 	// The leading edge glows extra while it's still travelling outward, then settles.
 	const float Travel = bGrowing ? FMath::Clamp((TargetRadius - CurrentRevealRadius) / FMath::Max(1.f, Edge * 0.5f), 0.f, 1.f) : 0.f;

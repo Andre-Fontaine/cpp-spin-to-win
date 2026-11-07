@@ -56,6 +56,10 @@ public:
 	 *  camera follows it, pulling back as the city lights up. */
 	float GetRevealFraction() const;
 
+	/** How far from the dial the light reaches right now, including the soft band at its edge where
+	 *  lights are still fading in (world units). */
+	float GetRevealOuterRadius() const;
+
 	// ---------------- Grid brightness (reacts to hand speed) ----------------
 
 	/** Actor tag used to find the floor grid lines to drive. */
@@ -207,6 +211,9 @@ private:
 	float CityExtent = 20000.f;
 	/** The fully lit radius as currently shown (chases the target, see RevealSpreadSpeed). */
 	float CurrentRevealRadius = -1.f;
+
+	/** Width of the fade band at the light's edge, as last shown. */
+	float CurrentRevealEdge = 0.f;
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;

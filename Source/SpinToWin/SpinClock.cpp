@@ -34,11 +34,6 @@ namespace
 	// Thickness of the neon plates on an obstacle, and how far they overhang its hull.
 	constexpr float ObstacleGlowThickness = 5.f;
 	constexpr float ObstacleGlowOverhang = 1.08f;
-
-	// The camera frames the city out to this multiple of the lit radius (plus a fixed margin), so
-	// the spreading light always stays inside the shot instead of running off the top of it.
-	constexpr float CameraLeadMultiple = 1.35f;
-	constexpr float CameraLeadMargin = 2500.f;
 }
 
 /** How far into its close-up -> wide-shot move the camera should be (0..1), given how far the city's
@@ -56,22 +51,18 @@ static float GetRevealCameraBlend(const ASpinClock& Clock)
 		return 0.f;
 	}
 
-	// How far the light has spread from the dial, in world units.
-	float CityRadius = FX->RevealStartRadius;
-	for (TActorIterator<ASpinCityBuilder> It(Clock.GetWorld()); It; ++It)
-	{
-		CityRadius = FMath::Max(CityRadius, It->GetCityRadius());
-	}
+	// How far the camera needs to see: past the light's outer edge (including the band where lights
+	// are still fading in), with a buffer, so newly lit buildings come on in the shot.
 	const float Fraction = FX->GetRevealFraction();
-	const float LitRadius = FMath::Lerp(FX->RevealStartRadius, CityRadius, Fraction);
-	const float Wanted = LitRadius * CameraLeadMultiple + CameraLeadMargin;
+	const float Wanted = FX->GetRevealOuterRadius() * Clock.RevealCameraLead + Clock.RevealCameraBuffer;
 
 	// How far ahead of the dial the top of the frame meets the ground, for a given blend.
 	const UCameraComponent* Camera = Clock.FindComponentByClass<UCameraComponent>();
 	const float Aspect = Camera ? FMath::Max(0.5f, Camera->AspectRatio) : 16.f / 9.f;
-	const float HalfVerticalFOV = FMath::RadiansToDegrees(FMath::Atan(FMath::Tan(FMath::DegreesToRadians(Clock.CameraFOV * 0.5f)) / Aspect));
-	auto Reach = [&Clock, HalfVerticalFOV](float Blend) -> float
+	auto Reach = [&Clock, Aspect](float Blend) -> float
 	{
+		const float FOV = FMath::Lerp(Clock.CameraFOV, Clock.RevealedCameraFOV, Blend);
+		const float HalfVerticalFOV = FMath::RadiansToDegrees(FMath::Atan(FMath::Tan(FMath::DegreesToRadians(FOV * 0.5f)) / Aspect));
 		const float Pitch = FMath::Lerp(Clock.CameraPitch, Clock.RevealedCameraPitch, Blend);
 		const float Dist = Clock.DialRadius * FMath::Lerp(Clock.CameraDistanceFactor, Clock.RevealedCameraDistanceFactor, Blend);
 		const float ViewPitch = Pitch - Clock.RevealedCameraLookUp * Blend;
@@ -157,6 +148,21 @@ ASpinClock::ASpinClock()
 	HandPivot = CreateDefaultSubobject<USceneComponent>(TEXT("HandPivot"));
 	HandPivot->SetupAttachment(DialPivot);
 	Hand = MakeMesh(TEXT("Hand"), CubeMesh, HandPivot);
+	HandOuterPivot = CreateDefaultSubobject<USceneComponent>(TEXT("HandOuterPivot"));
+	HandOuterPivot->SetupAttachment(HandPivot);
+	HandOuterBody = MakeMesh(TEXT("HandOuterBody"), CubeMesh, HandOuterPivot);
+	for (int32 i = 0; i < NumHandNeon; ++i)
+	{
+		USceneComponent* Parent = i < NumInnerHandNeon ? HandPivot.Get() : HandOuterPivot.Get();
+		UStaticMeshComponent* Line = MakeMesh(*FString::Printf(TEXT("HandNeon%d"), i), CubeMesh, Parent);
+		Line->SetCastShadow(false);
+		HandNeon.Add(Line);
+	}
+	HandSpindle = MakeMesh(TEXT("HandSpindle"), CylinderMesh, DialPivot);
+	HandSpindleBand = MakeMesh(TEXT("HandSpindleBand"), CylinderMesh, DialPivot);
+	HandSpindleBand->SetCastShadow(false);
+	HandCollar = MakeMesh(TEXT("HandCollar"), CylinderMesh, HandPivot);
+	HandCollar->SetCastShadow(false);
 
 	for (int32 i = 0; i < NumZoneSegments; ++i)
 	{
@@ -218,6 +224,15 @@ ASpinClock::ASpinClock()
 		UStaticMeshComponent* BaseGlow = MakeMesh(*FString::Printf(TEXT("ObstacleBaseGlow%d"), i), CylinderMesh, DialPivot);
 		BaseGlow->SetCastShadow(false);
 		ObstacleBaseGlows.Add(BaseGlow);
+
+		// Its neon sign: a dark board, and the tubes of its arrow and frame.
+		ObstacleSignBoards.Add(MakeMesh(*FString::Printf(TEXT("ObstacleSignBoard%d"), i), CubeMesh, DialPivot));
+		for (int32 t = 0; t < NumSignNeon; ++t)
+		{
+			UStaticMeshComponent* Tube = MakeMesh(*FString::Printf(TEXT("ObstacleSignNeon%d_%d"), i, t), CubeMesh, DialPivot);
+			Tube->SetCastShadow(false);
+			ObstacleSignNeon.Add(Tube);
+		}
 	}
 	ObstacleStates.SetNum(NumObstacleSlots);
 
@@ -313,7 +328,6 @@ void ASpinClock::BuildVisuals()
 	// Sizes: the engine's cylinder and cube are 100 units across, so scale = size / 100.
 	const float RimThickness = 20.f;
 	const float HubRadius = R * HubRadiusFraction;
-	const float HubHeight = 14.f;
 	const float HandLength = R * HandLengthFraction;
 
 	Rim->SetRelativeScale3D(FVector(R * 2.14f / 100.f, R * 2.14f / 100.f, RimThickness / 100.f));
@@ -325,9 +339,85 @@ void ASpinClock::BuildVisuals()
 	Hub->SetRelativeScale3D(FVector(HubRadius * 2.f / 100.f, HubRadius * 2.f / 100.f, HubHeight / 100.f));
 	Hub->SetRelativeLocation(FVector(0.f, 0.f, HubHeight * 0.5f));
 
-	// The hand extends along the pivot's +X, and sits just above the zone band.
-	Hand->SetRelativeScale3D(FVector(HandLength / 100.f, HandWidth / 100.f, HandHeight / 100.f));
-	Hand->SetRelativeLocation(FVector(HandLength * 0.5f, 0.f, 3.f + HandHeight * 0.5f));
+	// The hand extends along the pivot's +X, and sits just above the zone band. Its dark body runs
+	// from a short counterweight behind the hub to where the pointed tip begins; neon traces its edges,
+	// a spine runs down its middle, a chevron makes the tip, and a bar caps the tail. It's in two
+	// halves, jointed in the middle (HandOuterPivot), so a jam can buckle it.
+	{
+		// A dial saved into a level keeps the attachments it was saved with, which can be from before
+		// the joint existed - so make sure the outer half really hangs off it.
+		for (int32 i = NumInnerHandNeon; i < HandNeon.Num(); ++i)
+		{
+			if (HandNeon[i]->GetAttachParent() != HandOuterPivot)
+			{
+				HandNeon[i]->AttachToComponent(HandOuterPivot, FAttachmentTransformRules::KeepRelativeTransform);
+			}
+		}
+		for (int32 i = 0; i < NumInnerHandNeon && i < HandNeon.Num(); ++i)
+		{
+			if (HandNeon[i]->GetAttachParent() != HandPivot)
+			{
+				HandNeon[i]->AttachToComponent(HandPivot, FAttachmentTransformRules::KeepRelativeTransform);
+			}
+		}
+
+		const float L = HandLength;
+		const float HalfW = HandWidth * 0.4f;
+		const float Top = 3.f + HandHeight + 1.f;
+		const float E = FMath::Max(HandLineWidth, 1.f);
+		const float TailX = -L * 0.14f;
+		const float TipStartX = L * 0.86f;
+
+		// The joint, halfway along. Inner parts are placed relative to the hub, outer ones relative to
+		// the joint (hence the "- Joint" below).
+		const float Joint = L * 0.5f;
+		HandOuterPivot->SetRelativeLocation(FVector(Joint, 0.f, 0.f));
+
+		Hand->SetRelativeScale3D(FVector(Joint - TailX, HandWidth * 0.8f, HandHeight) / 100.f);
+		Hand->SetRelativeLocation(FVector((Joint + TailX) * 0.5f, 0.f, 3.f + HandHeight * 0.5f));
+		HandOuterBody->SetRelativeScale3D(FVector(TipStartX - Joint, HandWidth * 0.8f, HandHeight) / 100.f);
+		HandOuterBody->SetRelativeLocation(FVector((TipStartX - Joint) * 0.5f, 0.f, 3.f + HandHeight * 0.5f));
+
+		auto Line = [](UStaticMeshComponent* Comp, const FVector& A, const FVector& B, float Width)
+		{
+			const FVector D = B - A;
+			const float Length = D.Size();
+			Comp->SetRelativeLocation((A + B) * 0.5f);
+			Comp->SetRelativeRotation(Length > KINDA_SMALL_NUMBER ? D.Rotation() : FRotator::ZeroRotator);
+			Comp->SetRelativeScale3D(FVector(Length + Width, Width, Width) / 100.f);
+		};
+		if (HandNeon.Num() >= NumHandNeon)
+		{
+			// Inner half: edges and spine up to the joint, and the tail cap.
+			Line(HandNeon[0], FVector(L * 0.02f, -HalfW, Top), FVector(Joint, -HalfW, Top), E);
+			Line(HandNeon[1], FVector(L * 0.02f, HalfW, Top), FVector(Joint, HalfW, Top), E);
+			Line(HandNeon[2], FVector(L * 0.1f, 0.f, Top + 1.f), FVector(Joint, 0.f, Top + 1.f), E * 0.7f);
+			Line(HandNeon[3], FVector(TailX, -HandWidth * 0.5f, Top), FVector(TailX, HandWidth * 0.5f, Top), E * 1.4f);
+			// Outer half: edges and spine from the joint on, and the pointed tip.
+			Line(HandNeon[4], FVector(0.f, -HalfW, Top), FVector(TipStartX - Joint, -HalfW, Top), E);
+			Line(HandNeon[5], FVector(0.f, HalfW, Top), FVector(TipStartX - Joint, HalfW, Top), E);
+			Line(HandNeon[6], FVector(0.f, 0.f, Top + 1.f), FVector(L * 0.8f - Joint, 0.f, Top + 1.f), E * 0.7f);
+			Line(HandNeon[7], FVector(TipStartX - Joint, -HalfW, Top), FVector(L - Joint, 0.f, Top), E);
+			Line(HandNeon[8], FVector(TipStartX - Joint, HalfW, Top), FVector(L - Joint, 0.f, Top), E);
+		}
+	}
+
+	// The collar seating the hand on its spindle (the spindle itself is laid out by UpdateSpindle).
+	{
+		const float SpindleRadius = HubRadius * 0.45f;
+		HandCollar->SetRelativeLocation(FVector(0.f, 0.f, 3.f + HandHeight * 0.5f));
+		HandCollar->SetRelativeScale3D(FVector(SpindleRadius * 3.2f, SpindleRadius * 3.2f, HandHeight + 4.f) / 100.f);
+		UpdateSpindle(0.f);
+	}
+
+	// Obstacles' signs: hidden until one is spawned (PlaceObstacle draws them).
+	for (const TArray<TObjectPtr<UStaticMeshComponent>>* Parts : { &ObstacleSignNeon, &ObstacleSignBoards })
+	{
+		for (UStaticMeshComponent* Part : *Parts)
+		{
+			Part->SetVisibility(false);
+		}
+	}
 
 	// Obstacles: round posts, hidden until one is spawned (which also sets their height).
 	for (UStaticMeshComponent* Post : ObstacleMeshes)
@@ -377,10 +467,34 @@ void ASpinClock::BuildVisuals()
 	if (NeonMaterial)
 	{
 		Hub->SetMaterial(0, NeonMaterial);
-		Hand->SetMaterial(0, NeonMaterial);
 	}
 	HubMID = MakeMID(Hub, HubIdleColor);
-	HandMID = MakeMID(Hand, FLinearColor::White * (NeonMaterial ? HandGlow : 1.f));
+
+	// The hand: a dark body (lit material), with its neon lines sharing one glowing material whose
+	// colour shows the hand's state (see UpdateColors).
+	if (BaseMaterial)
+	{
+		Hand->SetMaterial(0, BaseMaterial); // (it was neon once; a saved level may still say so)
+	}
+	MakeMID(Hand, HandBodyColor);
+	if (BaseMaterial)
+	{
+		HandSpindle->SetMaterial(0, BaseMaterial);
+		HandOuterBody->SetMaterial(0, BaseMaterial);
+	}
+	MakeMID(HandOuterBody, HandBodyColor);
+	MakeMID(HandSpindle, HandBodyColor);
+	HandMID = UMaterialInstanceDynamic::Create(NeonMaterial ? NeonMaterial.Get() : BaseMaterial.Get(), this);
+	if (HandMID)
+	{
+		HandMID->SetVectorParameterValue(ColorParam, FLinearColor::White * (NeonMaterial ? HandGlow : 1.f));
+		for (UStaticMeshComponent* Line : HandNeon)
+		{
+			Line->SetMaterial(0, HandMID);
+		}
+		HandSpindleBand->SetMaterial(0, HandMID);
+		HandCollar->SetMaterial(0, HandMID);
+	}
 
 	if (BaseMaterial)
 	{
@@ -454,6 +568,17 @@ void ASpinClock::BuildVisuals()
 			ObstacleGlowMIDs.Add(GlowMID);
 			ObstacleTopGlows[i]->SetMaterial(0, GlowMID);
 			ObstacleBaseGlows[i]->SetMaterial(0, GlowMID);
+			for (int32 t = 0; t < NumSignNeon; ++t)
+			{
+				ObstacleSignNeon[i * NumSignNeon + t]->SetMaterial(0, GlowMID);
+			}
+		}
+
+		// The signs' boards: dark, like the city's buildings.
+		for (UStaticMeshComponent* Board : ObstacleSignBoards)
+		{
+			Board->SetMaterial(0, BaseMaterial);
+			MakeMID(Board, ObstacleSignBoardColor);
 		}
 	}
 
@@ -576,9 +701,28 @@ void ASpinClock::Tick(float DeltaSeconds)
 			bLiftPressValid = false;
 		}
 	}
+	// The hand rides a spring toward its target height rather than sliding at a fixed speed: it snaps
+	// up, overshoots a touch and settles; dropping, it falls and bounces lightly off the dial. (Small
+	// steps keep the spring steady however long the frame was.)
 	const bool bRaise = IsLiftActive();
 	const float LiftTarget = bRaise ? MaxHandLift : 0.f;
-	HandLift = FMath::FInterpConstantTo(HandLift, LiftTarget, DeltaSeconds, bRaise ? LiftRiseSpeed : LiftLowerSpeed);
+	{
+		const float Stiffness = bRaise ? LiftRiseStiffness : LiftDropStiffness;
+		const float Damping = 2.f * (bRaise ? LiftRiseDamping : LiftDropDamping) * FMath::Sqrt(Stiffness);
+		const int32 Steps = FMath::Clamp(FMath::CeilToInt(DeltaSeconds * 240.f), 1, 24);
+		const float Step = DeltaSeconds / Steps;
+		for (int32 i = 0; i < Steps; ++i)
+		{
+			HandLiftVelocity += (Stiffness * (LiftTarget - HandLift) - Damping * HandLiftVelocity) * Step;
+			HandLift += HandLiftVelocity * Step;
+			if (HandLift < 0.f)
+			{
+				HandLift = 0.f;
+				HandLiftVelocity = HandLiftVelocity < 0.f ? -HandLiftVelocity * LiftLandingBounce : HandLiftVelocity;
+			}
+		}
+		HandHoverTime = HandLift > MaxHandLift * 0.5f ? HandHoverTime + DeltaSeconds : 0.f;
+	}
 
 	if (const ASpinGameMode* GM = GameMode.Get())
 	{
@@ -595,9 +739,56 @@ void ASpinClock::Tick(float DeltaSeconds)
 		{
 			// Each catch of the gears makes the hand snag for a moment (visual only).
 			HandRotation.Yaw -= GM->Direction * GrindFlash * 1.2f;
+			// As it lifts or drops, its tip lags behind the hub - tipping down on the way up, up on the way down.
+			HandRotation.Pitch = FMath::Clamp(-HandLiftVelocity * LiftTiltPerSpeed, -4.f, 4.f);
 		}
 		HandPivot->SetRelativeRotation(HandRotation);
-		HandPivot->SetRelativeLocation(FVector(0.f, 0.f, HandLift));
+
+		// Held up, it hovers gently (easing in, so it doesn't jerk the moment it gets there). Looks
+		// only: the hit test uses HandLift.
+		const float Hover = LiftHoverBob * FMath::Sin(HandHoverTime * 5.f) * FMath::Clamp(HandHoverTime * 2.f, 0.f, 1.f);
+		HandPivot->SetRelativeLocation(FVector(0.f, 0.f, HandLift + Hover));
+		UpdateSpindle(HandLift + Hover);
+
+		// A jam buckles the hand at its joint (sideways and drooping), and fixing it straightens it -
+		// both happening while the hand glitches.
+		HandBend = FMath::FInterpConstantTo(HandBend, bJammed ? 1.f : 0.f, DeltaSeconds, 1.f / FMath::Max(0.05f, JamGlitchTime * 0.7f));
+		const float Bend = FMath::SmoothStep(0.f, 1.f, HandBend);
+		HandOuterPivot->SetRelativeRotation(FRotator(-JamDroop * Bend, JamBendAngle * Bend, 0.f));
+
+		// The glitch: the hand's parts blink out at random and it jumps about (it also flashes colours,
+		// see UpdateColors). Looks only - the hand's real position is untouched.
+		const bool bWasGlitching = HandGlitchTimer > 0.f;
+		HandGlitchTimer = FMath::Max(0.f, HandGlitchTimer - DeltaSeconds);
+		UStaticMeshComponent* HandParts[] = { Hand, HandOuterBody, HandCollar };
+		if (HandGlitchTimer > 0.f)
+		{
+			const float Strength = FMath::Clamp(HandGlitchTimer / FMath::Max(0.01f, JamGlitchTime), 0.f, 1.f);
+			HandGlitchSeed = static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(GetWorld()->GetTimeSeconds() * DialGlitchRate)), 0x7A11u));
+			const FRandomStream Noise(HandGlitchSeed);
+			const float ShowChance = 0.4f + 0.6f * (1.f - Strength);
+			for (UStaticMeshComponent* Part : HandParts)
+			{
+				Part->SetVisibility(Noise.FRand() < ShowChance);
+			}
+			for (UStaticMeshComponent* Line : HandNeon)
+			{
+				Line->SetVisibility(Noise.FRand() < ShowChance);
+			}
+			const FVector Jump(Noise.FRandRange(-1.f, 1.f), Noise.FRandRange(-1.f, 1.f), Noise.FRandRange(-0.4f, 0.4f));
+			HandPivot->SetRelativeLocation(HandPivot->GetRelativeLocation() + Jump * 30.f * Strength);
+		}
+		else if (bWasGlitching)
+		{
+			for (UStaticMeshComponent* Part : HandParts)
+			{
+				Part->SetVisibility(true);
+			}
+			for (UStaticMeshComponent* Line : HandNeon)
+			{
+				Line->SetVisibility(true);
+			}
+		}
 
 		InvincibleDim = FMath::FInterpConstantTo(InvincibleDim, (GM->bInvincible || GM->IsResumeCountingDown()) ? 1.f : 0.f, DeltaSeconds, 1.f / InvincibleFadeTime);
 
@@ -776,10 +967,16 @@ void ASpinClock::SetSparking(bool bNewSparking)
 
 void ASpinClock::SetJammed(bool bNewJammed)
 {
+	// The hand glitches as it breaks, and again as it's fixed.
+	if (bNewJammed != bJammed)
+	{
+		HandGlitchTimer = JamGlitchTime;
+	}
 	bJammed = bNewJammed;
 	if (!bJammed)
 	{
 		JamWobbleTime = 0.f;
+		JamTrailOwed = 0.f;
 	}
 }
 
@@ -834,6 +1031,40 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 		GrindBurstTimer = 0.f;
 	}
 	GrindFlash = FMath::Max(0.f, GrindFlash - DeltaSeconds * 6.f);
+
+	// A jammed hand throws a steady trail of sparks off its buckled outer half, flung out behind it
+	// as it turns.
+	if (bJammed && GM && HandOuterPivot)
+	{
+		JamTrailOwed += DeltaSeconds * JamTrailSparksPerSecond;
+		const float Heading = FMath::DegreesToRadians(GM->HandAngle);
+		const FVector Behind = -FVector(-FMath::Sin(Heading), FMath::Cos(Heading), 0.f) * SpinSign; // opposite to its travel
+		const FTransform DialToWorld = DialPivot->GetComponentTransform();
+		const FTransform OuterToWorld = HandOuterPivot->GetComponentTransform();
+		const float OuterLength = DialRadius * HandLengthFraction * 0.5f;
+
+		for (FSpark& S : Sparks)
+		{
+			if (JamTrailOwed < 1.f)
+			{
+				break;
+			}
+			if (S.Life > 0.f)
+			{
+				continue;
+			}
+			JamTrailOwed -= 1.f;
+
+			// Somewhere along the outer half, favouring the tip.
+			const float Along = OuterLength * FMath::Sqrt(FMath::FRand());
+			const FVector World = OuterToWorld.TransformPosition(FVector(Along, FMath::FRandRange(-0.4f, 0.4f) * HandWidth, 3.f + HandHeight));
+			S.Age = 0.f;
+			S.Life = FMath::FRandRange(0.25f, 0.5f);
+			S.Location = DialToWorld.InverseTransformPosition(World);
+			S.Velocity = (Behind * FMath::FRandRange(150.f, 420.f) + FVector(FMath::FRandRange(-60.f, 60.f), FMath::FRandRange(-60.f, 60.f), FMath::FRandRange(80.f, 260.f))) * SizeScale;
+		}
+		JamTrailOwed = FMath::Min(JamTrailOwed, 4.f); // don't build up a backlog if the pool is full
+	}
 
 	// The pillar glows hot with each catch, then cools.
 	if (HubMID)
@@ -1022,6 +1253,16 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 		else if (IsHandRaised())
 		{
 			HandColor = FLinearColor(0.4f, 0.9f, 1.f);
+		}
+
+		// Glitching (as it jams, and as it's fixed): flashes of random colour.
+		if (HandGlitchTimer > 0.f)
+		{
+			const FRandomStream Noise(HandGlitchSeed + 7);
+			if (Noise.FRand() < 0.6f)
+			{
+				HandColor = GlitchPalette[Noise.RandHelper(UE_ARRAY_COUNT(GlitchPalette))];
+			}
 		}
 		HandMID->SetVectorParameterValue(ColorParam, NeonMaterial ? HandColor * HandGlow : HandColor);
 	}
@@ -1213,6 +1454,17 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 		bool bShown = true;
 		FVector2D Jitter = FVector2D::ZeroVector;
 		FLinearColor Glow = (S.bHigh ? HighObstacleColor : ObstacleColor) * Presence;
+
+		// Like real neon, the sign hums: a slow, gentle pulse, and now and then a quick buzz where it dips.
+		{
+			float Hum = 0.88f + 0.12f * FMath::Sin(S.Elapsed * 3.f + i * 1.7f);
+			const FRandomStream Buzz(static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(S.Elapsed * 16.f)), static_cast<uint32>(i + 101))));
+			if (Buzz.FRand() < 0.04f)
+			{
+				Hum *= 0.3f;
+			}
+			Glow *= Hum;
+		}
 		if (S.Glitch > 0.f)
 		{
 			S.GlitchSeed = static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(S.Elapsed * DialGlitchRate)), static_cast<uint32>(i + 1)));
@@ -1234,12 +1486,35 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 	}
 }
 
+void ASpinClock::UpdateSpindle(float HandZ)
+{
+	// From the top of the hub up into the middle of the hand, wherever the hand is now - a piston
+	// that extends as it lifts. The neon band shows once there's enough of it to see.
+	const float Radius = DialRadius * HubRadiusFraction * 0.45f;
+	const float Top = HandZ + 3.f + HandHeight * 0.5f;
+	const float Length = FMath::Max(Top - HubHeight, 2.f);
+	HandSpindle->SetRelativeLocation(FVector(0.f, 0.f, HubHeight + Length * 0.5f));
+	HandSpindle->SetRelativeScale3D(FVector(Radius * 2.f, Radius * 2.f, Length) / 100.f);
+
+	HandSpindleBand->SetVisibility(Length > 30.f);
+	HandSpindleBand->SetRelativeLocation(FVector(0.f, 0.f, HubHeight + Length * 0.45f));
+	HandSpindleBand->SetRelativeScale3D(FVector(Radius * 2.f + 5.f, Radius * 2.f + 5.f, 5.f) / 100.f);
+}
+
 void ASpinClock::ShowObstacle(int32 Index, bool bShown)
 {
-	ObstacleMeshes[Index]->SetVisibility(bShown);
-	ObstacleTopGlows[Index]->SetVisibility(bShown);
-	ObstacleBaseGlows[Index]->SetVisibility(bShown);
-	ObstacleShadows[Index]->SetVisibility(bShown && ObstacleStates[Index].bHigh);
+	// Obstacles are neon arrows now (see PlaceObstacle). The old post and its top plate stay hidden;
+	// a low one keeps its glowing footprint on the dial, a high one its shadow beneath it.
+	const bool bHigh = ObstacleStates[Index].bHigh;
+	ObstacleMeshes[Index]->SetVisibility(false);
+	ObstacleTopGlows[Index]->SetVisibility(false);
+	ObstacleBaseGlows[Index]->SetVisibility(bShown && !bHigh);
+	ObstacleShadows[Index]->SetVisibility(bShown && bHigh);
+	ObstacleSignBoards[Index]->SetVisibility(bShown);
+	for (int32 t = 0; t < NumSignNeon; ++t)
+	{
+		ObstacleSignNeon[Index * NumSignNeon + t]->SetVisibility(bShown);
+	}
 }
 
 void ASpinClock::PlaceObstacle(int32 Index, const FVector2D& Position)
@@ -1260,6 +1535,69 @@ void ASpinClock::PlaceObstacle(int32 Index, const FVector2D& Position)
 	ObstacleShadows[Index]->SetRelativeRotation(Facing);
 	ObstacleTopGlows[Index]->SetRelativeRotation(Facing);
 	ObstacleBaseGlows[Index]->SetRelativeRotation(Facing);
+
+	// The sign, flat-on to the camera (which always looks along +X): a dark board, a neon frame round
+	// its edge, and an arrow bent from neon tube - its outline traced as one closed shape. A low
+	// obstacle's sign stands on the dial with an up arrow (lift over it); a high one's floats, hovering
+	// gently, with a down arrow - its bottom edge never dipping into the gap the hand passes under.
+	const float ArrowWidth = ObstacleRadius * 1.7f;
+	const float HeadHeight = ArrowWidth * 0.5f;
+	const float ShaftHalf = ArrowWidth * 0.17f;
+	const float Height = FMath::Max(ObstacleArrowHeight, HeadHeight * 1.6f);
+	const float T = FMath::Max(ObstacleArrowThickness, 1.f);
+	const float M = FMath::Max(ObstacleSignMargin, T);
+
+	// The board's bottom edge, then everything stacks up from it.
+	const float Hover = S.bHigh ? ObstacleArrowBob * (0.5f + 0.5f * FMath::Sin(S.Elapsed * 2.5f)) : 0.f;
+	const float BoardBottom = S.bHigh ? HighObstacleBottom + Hover : 3.f;
+	const float ArrowBottom = BoardBottom + M;
+	const float ArrowTop = ArrowBottom + Height;
+	const float BoardTop = ArrowTop + M;
+	const float HalfWidth = ArrowWidth * 0.5f + M;
+
+	auto Point = [&Position](float Across, float Z) { return FVector(Position.X, Position.Y + Across, Z); };
+	auto Tube = [T](UStaticMeshComponent* Comp, const FVector& A, const FVector& B, float Width)
+	{
+		const FVector D = B - A;
+		const float Length = D.Size();
+		Comp->SetRelativeLocation((A + B) * 0.5f);
+		Comp->SetRelativeRotation(Length > KINDA_SMALL_NUMBER ? D.Rotation() : FRotator::ZeroRotator);
+		Comp->SetRelativeScale3D(FVector(Length + Width, Width, Width) / 100.f);
+	};
+
+	// The board sits just behind the tubes.
+	UStaticMeshComponent* Board = ObstacleSignBoards[Index];
+	Board->SetRelativeLocation(FVector(Position.X + T, Position.Y, (BoardBottom + BoardTop) * 0.5f));
+	Board->SetRelativeRotation(FRotator::ZeroRotator);
+	Board->SetRelativeScale3D(FVector(T, HalfWidth * 2.f, BoardTop - BoardBottom) / 100.f);
+
+	// The arrow's outline, as one closed loop of tube. Up arrow: shaft at the bottom, head on top;
+	// a down arrow is the same shape flipped.
+	const float Neck = S.bHigh ? ArrowBottom + HeadHeight : ArrowTop - HeadHeight; // where shaft meets head
+	const float TipZ = S.bHigh ? ArrowBottom : ArrowTop;
+	const float TailZ = S.bHigh ? ArrowTop : ArrowBottom;
+	const FVector Outline[NumSignArrowTubes] = {
+		Point(-ShaftHalf, TailZ),
+		Point(-ShaftHalf, Neck),
+		Point(-ArrowWidth * 0.5f, Neck),
+		Point(0.f, TipZ),
+		Point(ArrowWidth * 0.5f, Neck),
+		Point(ShaftHalf, Neck),
+		Point(ShaftHalf, TailZ),
+	};
+	const TObjectPtr<UStaticMeshComponent>* Tubes = &ObstacleSignNeon[Index * NumSignNeon];
+	for (int32 t = 0; t < NumSignArrowTubes; ++t)
+	{
+		Tube(Tubes[t], Outline[t], Outline[(t + 1) % NumSignArrowTubes], T);
+	}
+
+	// The frame round the board's edge: thinner tube.
+	const FVector Corners[4] = {
+		Point(-HalfWidth, BoardBottom), Point(-HalfWidth, BoardTop), Point(HalfWidth, BoardTop), Point(HalfWidth, BoardBottom) };
+	for (int32 c = 0; c < 4; ++c)
+	{
+		Tube(Tubes[NumSignArrowTubes + c], Corners[c], Corners[(c + 1) % 4], T * 0.6f);
+	}
 }
 
 bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh) const
@@ -1315,6 +1653,7 @@ void ASpinClock::SetCameraBase(float Blend)
 	const float PitchRad = FMath::DegreesToRadians(Pitch);
 	CameraBaseLocation = FVector(-Dist * FMath::Cos(PitchRad), 0.f, Dist * FMath::Sin(PitchRad));
 	CameraBaseRotation = FRotator(-(Pitch - RevealedCameraLookUp * Blend), 0.f, 0.f);
+	Camera->SetFieldOfView(FMath::Lerp(CameraFOV, RevealedCameraFOV, Blend));
 
 	// In play, UpdateCameraMotion then places the camera around this base.
 	Camera->SetRelativeLocation(CameraBaseLocation);

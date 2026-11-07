@@ -65,7 +65,7 @@ This repository contains the **C++ source and project config only**. The `Conten
 | `SpinHUD` | The in-run HUD (score, level, health, controls, callouts) and every menu and pause screen, all drawn in code |
 | `SpinClock` | The in-world dial actor: hand, zone, obstacle meshes, and the camera (which pulls back toward the skyline as the city lights up) |
 | `SpinCityFX` | The city reveal (the lights spread out from the dial as the run goes on, via `MPC_CityReveal`) and ambient effects on level-placed dressing |
-| `SpinCityBuilder` | The procedural neon city: districts, river and suspension bridge, parks, landmarks, flying traffic, wind, switching windows, and the jam glitch |
+| `SpinCityBuilder` | The procedural neon city: districts of towers with neon signs, open water around the dial, a river and suspension bridge with waterfront highways, landmarks, a cloudy night sky with a moon, rolling fog, flying traffic, wind, switching windows, and the jam glitch |
 | `SpinSaveGame` | Saved data: player profiles (with personal bests) and the shared leaderboard (top runs by level and by score) |
 
 Difficulty values (start speed, max speed, zone size, lives, jam timing, and so on) are `UPROPERTY` fields on `SpinGameMode`.

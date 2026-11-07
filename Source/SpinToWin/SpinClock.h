@@ -257,9 +257,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	FLinearColor RimColor = FLinearColor(0.025f, 0.03f, 0.045f);
 
-	/** The hand glows (neon material); its state colours are multiplied by this. */
+	/** The hand's neon (edges, spine, pointed tip, tail) glows in its state colour multiplied by this. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Look")
 	float HandGlow = 1.6f;
+
+	/** The hand's body under the neon: dark, like the city's buildings. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
+	FLinearColor HandBodyColor = FLinearColor(0.01f, 0.012f, 0.022f);
+
+	/** Width of the hand's neon lines. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Look")
+	float HandLineWidth = 5.f;
 
 	/** Glow of the target zone band normally, and while the hand is inside it. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Look")
@@ -327,13 +335,50 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
 	float MaxHandLift = 150.f;
 
-	/** Rise speed, world units per second. */
-	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
-	float LiftRiseSpeed = 1400.f;
+	/** The hand moves on a spring, not at a fixed speed. Stiffness sets how snappy it is; damping
+	 *  how much it overshoots and wobbles before settling (1 = none, lower = more). Rising: */
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift", meta = (ClampMin = "10"))
+	float LiftRiseStiffness = 650.f;
 
-	/** Lowering speed, world units per second. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift", meta = (ClampMin = "0.05", ClampMax = "2"))
+	float LiftRiseDamping = 0.55f;
+
+	/** ...and dropping back down. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift", meta = (ClampMin = "10"))
+	float LiftDropStiffness = 420.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift", meta = (ClampMin = "0.05", ClampMax = "2"))
+	float LiftDropDamping = 0.45f;
+
+	/** When the hand lands on the dial it bounces back up with this share of its speed. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift", meta = (ClampMin = "0", ClampMax = "0.9"))
+	float LiftLandingBounce = 0.3f;
+
+	/** The hand tips as it moves (its tip lagging behind): degrees of tilt per unit/second of speed. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
-	float LiftLowerSpeed = 1000.f;
+	float LiftTiltPerSpeed = 0.004f;
+
+	/** While held up, the hand gently hovers up and down by this much (world units; looks only). */
+	UPROPERTY(EditAnywhere, Category = "Clock|Lift")
+	float LiftHoverBob = 3.f;
+
+	// ---------------- Jam look ----------------
+
+	/** When the hand jams its outer half buckles at the joint: this far sideways (degrees) and this
+	 *  far down. It straightens again once fixed. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam")
+	float JamBendAngle = 28.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam")
+	float JamDroop = 10.f;
+
+	/** Seconds the whole hand glitches for when it jams, and again when it's fixed. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam", meta = (ClampMin = "0.01"))
+	float JamGlitchTime = 0.45f;
+
+	/** Sparks per second streaming off the jammed hand, trailing behind it. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam", meta = (ClampMin = "0"))
+	float JamTrailSparksPerSecond = 70.f;
 
 	/** One lift lasts at most this many degrees of hand travel (360 = one full turn), then the
 	 *  hand drops by itself even if the button is still held. */
@@ -355,7 +400,7 @@ public:
 
 	/** The neon on a low post (values above 1 bloom). Its dark hull is a faint tint of this. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
-	FLinearColor ObstacleColor = FLinearColor(4.f, 0.9f, 0.15f);
+	FLinearColor ObstacleColor = FLinearColor(4.5f, 0.2f, 0.18f);
 
 	/** High posts float this far above the dial (world units). Lifting the hand at all reaches
 	 *  them; a resting hand passes underneath. */
@@ -377,6 +422,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles", meta = (ClampMin = "0.01"))
 	float ObstacleFadeOutTime = 0.3f;
 
+	/** Obstacles are neon signs: a dark board with a neon frame and an arrow bent from neon tube - an
+	 *  up arrow standing on the dial for a low one (lift over it), a down arrow floating above it for a
+	 *  high one (keep the hand down). The arrow's height, and the thickness of its tube. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
+	float ObstacleArrowHeight = 110.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
+	float ObstacleArrowThickness = 7.f;
+
+	/** How far a floating (high) sign hovers up and down. Signs standing on the dial stay put. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
+	float ObstacleArrowBob = 8.f;
+
+	/** Space between the arrow and the edge of its board. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
+	float ObstacleSignMargin = 14.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
+	FLinearColor ObstacleSignBoardColor = FLinearColor(0.008f, 0.01f, 0.018f);
+
 	// ---------------- Camera ----------------
 
 	/** Camera distance from the dial centre, as a multiple of the dial radius. */
@@ -396,15 +461,30 @@ public:
 	bool bCameraFollowsReveal = true;
 
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
-	float RevealedCameraPitch = 28.f;
+	float RevealedCameraPitch = 24.f;
 
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float RevealedCameraDistanceFactor = 10.f;
 
 	/** Once the city is lit, the camera also tilts its view up by this many degrees (without moving),
-	 *  so the dial drops toward the bottom of the frame and the skyline rises into view. */
+	 *  so the dial drops toward the bottom of the frame and the skyline and sky rise into view. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
-	float RevealedCameraLookUp = 13.f;
+	float RevealedCameraLookUp = 18.f;
+
+	/** The field of view widens to this as the camera pulls back, fitting in the skyline and the
+	 *  sky above it while keeping the dial in the shot. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
+	float RevealedCameraFOV = 82.f;
+
+	/** The camera pulls back far enough to see past the light's outer edge (where lights are still
+	 *  fading in) by this multiple of its distance, plus RevealCameraBuffer - so lights always come
+	 *  on inside the shot, never just out of it. Higher = the camera stays further ahead. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "1"))
+	float RevealCameraLead = 1.25f;
+
+	/** Extra distance (world units) the camera keeps in view beyond the light's outer edge. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0"))
+	float RevealCameraBuffer = 5000.f;
 
 	/** Seconds the camera lags behind the city's light as it pulls back. Higher = floatier. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0.05"))
@@ -472,6 +552,11 @@ private:
 	static constexpr int32 NumSparks = 80;
 	/** Radius of the hub pillar at the centre, as a fraction of the dial radius. */
 	static constexpr float HubRadiusFraction = 0.06f;
+	/** Height of the hub pillar's top above the dial. */
+	static constexpr float HubHeight = 14.f;
+
+	/** Reach the spindle up from the hub to the hand, at its current height (see HandSpindle). */
+	void UpdateSpindle(float HandZ);
 	static constexpr int32 NumRingSegments = 90;
 	static constexpr int32 NumTicks = 60;
 	static constexpr int32 NumTrackSegments = 72;
@@ -497,6 +582,25 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UStaticMeshComponent> Hand;
+
+	/** The shaft the hand rides on: rises out of the hub and stretches with the lift, so the hand is
+	 *  always mounted on something. A neon band runs round it, and a neon collar seats the hand on it. */
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> HandSpindle;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> HandSpindleBand;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> HandCollar;
+
+	/** The hand's joint, halfway along: everything beyond it hangs off this, so a jam can buckle the
+	 *  outer half (see JamBendAngle). The outer half of the dark body hangs off it too. */
+	UPROPERTY()
+	TObjectPtr<USceneComponent> HandOuterPivot;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> HandOuterBody;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ZoneSegments;
@@ -532,6 +636,23 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleBaseGlows;
+
+	/** Each obstacle's sign: NumSignNeon neon tubes per obstacle (the arrow's outline, then the frame),
+	 *  and one dark board each. Filled in the constructor and not saved (a saved list would replace
+	 *  this one when the level loads). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleSignNeon;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleSignBoards;
+
+	/** Tubes in one sign: 7 for the arrow's outline, 4 for the frame. */
+	static constexpr int32 NumSignArrowTubes = 7;
+	static constexpr int32 NumSignNeon = NumSignArrowTubes + 4;
+
+	/** The hand's neon: edge rails, centre spine, the two strokes of its pointed tip, and its tail. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> HandNeon;
 
 	/** One per obstacle, since each fades on its own. */
 	UPROPERTY()
@@ -642,6 +763,25 @@ private:
 	bool bSparking = false;
 	bool bJammed = false;
 	float JamWobbleTime = 0.f;
+
+	/** The lift spring's speed (world units per second, + = rising), and time spent held up (for the hover). */
+	float HandLiftVelocity = 0.f;
+	float HandHoverTime = 0.f;
+
+	/** Neon hand parts. The first four are on the inner half (edges, spine, tail cap), the rest on the
+	 *  outer half beyond the joint (edges, spine, and the two strokes of the tip). */
+	static constexpr int32 NumHandNeon = 9;
+	static constexpr int32 NumInnerHandNeon = 4;
+
+	/** How buckled the hand is (0 = straight, 1 = fully bent by a jam), eased. */
+	float HandBend = 0.f;
+
+	/** Seconds left of the hand's glitch (when it jams, and when it's fixed), and this frame's noise seed. */
+	float HandGlitchTimer = 0.f;
+	int32 HandGlitchSeed = 0;
+
+	/** Fractional sparks owed to the jammed hand's trail, carried between frames. */
+	float JamTrailOwed = 0.f;
 
 	FVector CameraBaseLocation = FVector::ZeroVector;
 	FRotator CameraBaseRotation = FRotator::ZeroRotator;

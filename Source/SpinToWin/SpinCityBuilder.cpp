@@ -40,6 +40,13 @@ ASpinCityBuilder::ASpinCityBuilder()
 	NeonMaterial = NeonFinder.Succeeded() ? NeonFinder.Object : nullptr;
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> WaterFinder(TEXT("/Game/Materials/Neon/M_Water.M_Water"));
 	WaterMaterial = WaterFinder.Succeeded() ? WaterFinder.Object : nullptr;
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FogFinder(TEXT("/Game/Materials/Neon/M_Fog.M_Fog"));
+	FogMaterial = FogFinder.Succeeded() ? FogFinder.Object : nullptr;
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneFinder(TEXT("/Engine/BasicShapes/Plane.Plane"));
+	UStaticMesh* Plane = PlaneFinder.Succeeded() ? PlaneFinder.Object : nullptr;
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> SkyFinder(TEXT("/Game/Materials/Neon/M_NightSky.M_NightSky"));
+	SkyMaterial = SkyFinder.Succeeded() ? SkyFinder.Object : nullptr;
 
 	auto Setup = [this](UPrimitiveComponent* Comp)
 	{
@@ -72,6 +79,31 @@ ASpinCityBuilder::ASpinCityBuilder()
 	if (Cube)
 	{
 		Water->SetStaticMesh(Cube);
+	}
+
+	LakeWater = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LakeWater"));
+	Setup(LakeWater);
+	if (Cube)
+	{
+		LakeWater->SetStaticMesh(Cube);
+	}
+
+	SkyDome = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SkyDome"));
+	Setup(SkyDome);
+	if (SphereFinder.Succeeded())
+	{
+		SkyDome->SetStaticMesh(SphereFinder.Object);
+	}
+
+	for (int32 i = 0; i < MaxFogLayers; ++i)
+	{
+		UStaticMeshComponent* Layer = CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("FogLayer%d"), i));
+		Setup(Layer);
+		if (Plane)
+		{
+			Layer->SetStaticMesh(Plane);
+		}
+		FogLayers.Add(Layer);
 	}
 
 	for (int32 i = 0; i < NumHullBands; ++i)
@@ -166,6 +198,7 @@ void ASpinCityBuilder::SetupMaterials()
 	}
 	Floor->SetMaterial(0, MakeMID(BaseMaterial, FloorColor, 0.f));
 	Water->SetMaterial(0, WaterMaterial ? WaterMaterial.Get() : Floor->GetMaterial(0));
+	LakeWater->SetMaterial(0, WaterMaterial ? WaterMaterial.Get() : Floor->GetMaterial(0));
 
 	CarBodies->SetMaterial(0, MakeMID(BaseMaterial, HullColor, 0.f));
 	CarHeadlights->SetMaterial(0, MakeMID(Glow, HeadlightColor, NeonIntensity * 1.5f));
@@ -174,15 +207,7 @@ void ASpinCityBuilder::SetupMaterials()
 	NeonMIDs.Reset();
 	for (int32 i = 0; i < NumSlots; ++i)
 	{
-		FLinearColor Color = FoliageColor;
-		if (i == WaterSlot)
-		{
-			Color = WaterColor;
-		}
-		else if (i < NumPalette)
-		{
-			Color = Palette.Num() > 0 ? Palette[i % Palette.Num()] : FLinearColor::White;
-		}
+		const FLinearColor Color = Palette.Num() > 0 ? Palette[i % Palette.Num()] : FLinearColor::White;
 		UMaterialInstanceDynamic* MID = MakeMID(Glow, Color, NeonIntensity);
 		NeonBoxes[i]->SetMaterial(0, MID);
 		NeonDiscs[i]->SetMaterial(0, MID);
@@ -224,6 +249,43 @@ void ASpinCityBuilder::SetupMaterials()
 
 	MoteMID = MakeMID(Glow, MoteColor, MoteIntensity);
 	Motes->SetMaterial(0, MoteMID);
+
+	// The night sky: the moon's direction from its azimuth and elevation, the clouds' drift and look.
+	if (SkyMaterial)
+	{
+		UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(SkyMaterial, this);
+		const float Az = FMath::DegreesToRadians(MoonAzimuth);
+		const float El = FMath::DegreesToRadians(MoonElevation);
+		MID->SetVectorParameterValue(TEXT("MoonDir"), FLinearColor(FMath::Cos(El) * FMath::Cos(Az), FMath::Cos(El) * FMath::Sin(Az), FMath::Sin(El), 0.f));
+		MID->SetScalarParameterValue(TEXT("MoonSize"), FMath::DegreesToRadians(MoonSize));
+		MID->SetVectorParameterValue(TEXT("MoonColor"), MoonColor);
+		MID->SetVectorParameterValue(TEXT("RingColor"), MoonRingColor);
+		MID->SetScalarParameterValue(TEXT("CloudCover"), CloudCover);
+		MID->SetScalarParameterValue(TEXT("CloudOpacity"), CloudOpacity);
+		MID->SetVectorParameterValue(TEXT("CloudLit"), CloudGlowColor);
+		MID->SetVectorParameterValue(TEXT("Wind"), FLinearColor(0.012f * CloudSpeed, 0.006f * CloudSpeed, 0.f, 0.f));
+		MID->SetScalarParameterValue(TEXT("Brightness"), SkyBrightness);
+		SkyDome->SetMaterial(0, MID);
+	}
+
+	// Fog layers: the lowest is the thickest, thinning toward the top. All drift with the wind.
+	if (FogMaterial)
+	{
+		const FVector2D Drift = WindDirection.GetSafeNormal() * WindSpeed * FogDriftShare;
+		const int32 UsedFogLayers = FMath::Min(NumFogLayers, FogLayers.Num());
+		for (int32 i = 0; i < FogLayers.Num(); ++i)
+		{
+			UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(FogMaterial, this);
+			const float T = UsedFogLayers > 1 ? static_cast<float>(i) / (UsedFogLayers - 1) : 0.f;
+			MID->SetVectorParameterValue(ColorParam, FogColor);
+			MID->SetVectorParameterValue(TEXT("Wind"), FLinearColor(Drift.X, Drift.Y, 12.f, 0.f));
+			MID->SetScalarParameterValue(TEXT("Brightness"), FogBrightness);
+			MID->SetScalarParameterValue(TEXT("Opacity"), FogOpacity * FMath::Lerp(1.f, 0.35f, T));
+			MID->SetScalarParameterValue(TEXT("Threshold"), FogPatchiness);
+			MID->SetScalarParameterValue(TEXT("NoiseScale"), FogNoiseScale);
+			FogLayers[i]->SetMaterial(0, MID);
+		}
+	}
 
 	// Every light group the jam glitch recolours, remembering its normal colour.
 	GlitchTargets.Reset();
@@ -649,8 +711,28 @@ void ASpinCityBuilder::AddNeonLine(int32 Slot, const FVector& A, const FVector& 
 	BuiltRadius = FMath::Max(BuiltRadius, FMath::Max(FVector2D(A).Size(), FVector2D(B).Size()));
 }
 
-void ASpinCityBuilder::AddFloorLine(UInstancedStaticMeshComponent* ISM, const FVector2D& A, const FVector2D& B, float Width)
+void ASpinCityBuilder::AddFloorLine(UInstancedStaticMeshComponent* ISM, const FVector2D& InA, const FVector2D& InB, float Width)
 {
+	// Lines on the floor don't go under the open water (they'd flicker through its surface): clip
+	// them at the shoreline. Markings floating on the water (FloorLineZ raised) are left alone.
+	FVector2D A = InA;
+	FVector2D B = InB;
+	const float Shore = GetShoreX();
+	if (Shore > 0.f && FloorLineZ < 2.f)
+	{
+		if (A.X < Shore && B.X < Shore)
+		{
+			return;
+		}
+		if (A.X < Shore || B.X < Shore)
+		{
+			FVector2D& Under = A.X < Shore ? A : B;
+			const FVector2D& Over = A.X < Shore ? B : A;
+			const float T = (Shore - Under.X) / (Over.X - Under.X);
+			Under = FMath::Lerp(Under, Over, T);
+		}
+	}
+
 	const FVector2D Delta = B - A;
 	const float Length = Delta.Size();
 	if (Length < KINDA_SMALL_NUMBER)
@@ -660,7 +742,7 @@ void ASpinCityBuilder::AddFloorLine(UInstancedStaticMeshComponent* ISM, const FV
 	const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Delta.Y, Delta.X));
 	const FVector2D Mid = (A + B) * 0.5f;
 	const float FloorWidth = FMath::Max(Width, MinFloorLineWidth);
-	Pending.FindOrAdd(ISM).Add(FTransform(FRotator(0.f, Yaw, 0.f), FVector(Mid.X, Mid.Y, 1.f), FVector(Length, FloorWidth, 2.f) / MeshSize));
+	Pending.FindOrAdd(ISM).Add(FTransform(FRotator(0.f, Yaw, 0.f), FVector(Mid.X, Mid.Y, FloorLineZ), FVector(Length, FloorWidth, 2.f) / MeshSize));
 }
 
 void ASpinCityBuilder::AddFloorRing(UInstancedStaticMeshComponent* ISM, float Radius, float WidthScale, bool bFullCircle)
@@ -745,9 +827,10 @@ void ASpinCityBuilder::Build()
 	FRandomStream Rand(Seed);
 	BuildFloor();
 	BuildPlaza();
+	BuildFog();
+	BuildLake();
 	BuildRiver();
 	BuildStreetLamps();
-	BuildMaglev();
 	BuildDistricts(Rand);
 	BuildLandmarks(Rand);
 
@@ -806,7 +889,10 @@ void ASpinCityBuilder::BuildFloor()
 
 void ASpinCityBuilder::BuildPlaza()
 {
-	// A giant clock face on the floor around the dial: rings, and 60 ticks with longer "hours".
+	// A giant clock face around the dial: rings, and 60 ticks with longer "hours". With the lake, it
+	// floats on the water's surface instead of lying on the floor beneath it.
+	FloorLineZ = GetShoreX() > PlazaRadius ? 5.f : 1.f;
+
 	for (const float R : { 900.f, 1300.f, 1950.f })
 	{
 		AddFloorRing(RingRoadLines, R, 1.f, true);
@@ -821,6 +907,7 @@ void ASpinCityBuilder::BuildPlaza()
 		AddFloorLine(bHour ? AvenueLines : RingRoadLines, Dir * 1350.f, Dir * (bHour ? 1900.f : 1600.f), LineWidthAt(Dir * 1600.f) * (bHour ? 2.f : 1.f));
 	}
 
+	FloorLineZ = 1.f;
 }
 
 void ASpinCityBuilder::BuildStreetLamps()
@@ -854,52 +941,6 @@ void ASpinCityBuilder::BuildStreetLamps()
 				AddHull(Base - Side * (S * 90.f) + FVector(0.f, 0.f, PoleHeight), FVector(16.f, 190.f, 14.f), AngleDeg);
 				AddNeonBox(4, Base - Side * (S * 170.f) + FVector(0.f, 0.f, PoleHeight - 14.f), FVector(FMath::Max(W * 3.f, 34.f), 120.f, 14.f), AngleDeg);
 			}
-		}
-	}
-}
-
-void ASpinCityBuilder::BuildMaglev()
-{
-	if (MaglevRingRoad <= 0)
-	{
-		return;
-	}
-	const float Radius = PlazaRadius + MaglevRingRoad * RingRoadSpacing + RingRoadWidth * 0.5f;
-	if (Radius > CityRadius)
-	{
-		return;
-	}
-
-	// A raised track circling the city above a ring road: a dark deck on pillars, two bright rails,
-	// and a purple glow along its underside.
-	const int32 Segments = FMath::CeilToInt(2.f * PI * Radius / 1400.f);
-	for (int32 i = 0; i < Segments; ++i)
-	{
-		const float A0 = 2.f * PI * i / Segments;
-		const float A1 = 2.f * PI * (i + 1) / Segments;
-		const float AMid = (A0 + A1) * 0.5f;
-		const FVector2D Mid(Radius * FMath::Cos(AMid), Radius * FMath::Sin(AMid));
-		if (!IsInView(Mid))
-		{
-			continue;
-		}
-
-		const FVector Out0(FMath::Cos(A0), FMath::Sin(A0), 0.f);
-		const FVector Out1(FMath::Cos(A1), FMath::Sin(A1), 0.f);
-		const float Chord = 2.f * Radius * FMath::Sin((A1 - A0) * 0.5f);
-		const float W = LineWidthAt(Mid);
-		const FVector Up(0.f, 0.f, MaglevHeight);
-
-		AddHull(FVector(Mid.X, Mid.Y, MaglevHeight), FVector(Chord * 1.02f, 260.f, 70.f), FMath::RadiansToDegrees(AMid) + 90.f);
-		for (const float Rail : { -115.f, 115.f })
-		{
-			AddNeonLine(0, Out0 * (Radius + Rail) + Up + FVector(0.f, 0.f, 45.f), Out1 * (Radius + Rail) + Up + FVector(0.f, 0.f, 45.f), W);
-		}
-		AddNeonLine(3, Out0 * Radius + Up - FVector(0.f, 0.f, 40.f), Out1 * Radius + Up - FVector(0.f, 0.f, 40.f), W * 1.5f);
-
-		if (i % 2 == 0 && !IsOnBridgeRoad(FVector2D(Out0 * Radius), 110.f))
-		{
-			AddHull(Out0 * Radius + FVector(0.f, 0.f, MaglevHeight * 0.5f), FVector(110.f, 110.f, MaglevHeight), FMath::RadiansToDegrees(A0));
 		}
 	}
 }
@@ -1018,16 +1059,7 @@ void ASpinCityBuilder::BuildDistricts(FRandomStream& Rand)
 
 void ASpinCityBuilder::BuildBlock(FRandomStream& Rand, const FVector2D& Pos, float Yaw, float Footprint, float Height, float Dist)
 {
-	// Parks thin out toward the edge, where the towers take over.
-	const float T = FMath::Clamp((Dist - PlazaRadius) / FMath::Max(1.f, CityRadius - PlazaRadius), 0.f, 1.f);
-	if (Rand.FRand() < ParkChance * (1.3f - T))
-	{
-		BuildPark(Rand, Pos, Yaw, BlockSize * 0.8f);
-	}
-	else
-	{
-		BuildTower(Rand, Pos, Yaw, Footprint, Height, Dist);
-	}
+	BuildTower(Rand, Pos, Yaw, Footprint, Height, Dist);
 }
 
 void ASpinCityBuilder::BuildTower(FRandomStream& Rand, const FVector2D& Pos, float Yaw, float Footprint, float Height, float Dist)
@@ -1312,96 +1344,6 @@ void ASpinCityBuilder::AddSign(FRandomStream& Rand, int32 Slot, const FVector& C
 }
 
 // ---------------------------------------------------------------------------------------------
-// Parks: neon trees, fountains
-// ---------------------------------------------------------------------------------------------
-
-void ASpinCityBuilder::BuildPark(FRandomStream& Rand, const FVector2D& Pos, float Yaw, float Size)
-{
-	const float W = LineWidthAt(Pos);
-	const FRotator Rot(0.f, Yaw, 0.f);
-
-	// A glowing green border marks out the park.
-	OutlineBox(FoliageSlot, FVector(Pos.X, Pos.Y, 0.f), FVector(Size, Size, 3.f), Yaw, W * 0.8f, false);
-
-	if (Rand.FRand() < FountainChance)
-	{
-		// A fountain in the middle, ringed by eight trees of one height.
-		BuildFountain(Pos, Size * 0.26f, W, Yaw);
-		const float TreeHeight = Rand.FRandRange(260.f, 420.f);
-		for (int32 i = 0; i < 8; ++i)
-		{
-			const float A = FMath::DegreesToRadians(Yaw + 22.5f + i * 45.f);
-			BuildTree(Pos + FVector2D(FMath::Cos(A), FMath::Sin(A)) * (Size * 0.4f), TreeHeight, W);
-		}
-	}
-	else
-	{
-		// A grove: trees in pairs mirrored across the park, plus sometimes one in the middle.
-		const int32 Pairs = Rand.RandRange(2, 3);
-		for (int32 i = 0; i < Pairs; ++i)
-		{
-			const float Along = Rand.FRandRange(-0.36f, 0.36f) * Size;
-			const float Across = Rand.FRandRange(0.12f, 0.36f) * Size;
-			const float TreeHeight = Rand.FRandRange(220.f, 560.f);
-			for (const float S : { -1.f, 1.f })
-			{
-				const FVector Offset = Rot.RotateVector(FVector(Along, S * Across, 0.f));
-				BuildTree(Pos + FVector2D(Offset), TreeHeight, W);
-			}
-		}
-		if (Rand.FRand() < 0.5f)
-		{
-			BuildTree(Pos, Rand.FRandRange(450.f, 700.f), W);
-		}
-	}
-}
-
-void ASpinCityBuilder::BuildTree(const FVector2D& Pos, float Height, float Width)
-{
-	// A dark trunk carrying a stack of glowing discs that narrow toward the top: a neon pine.
-	const FVector Base(Pos.X, Pos.Y, 0.f);
-	AddHull(Base + FVector(0.f, 0.f, Height * 0.25f), FVector(Height * 0.07f, Height * 0.07f, Height * 0.5f), 0.f, true);
-	for (int32 Tier = 0; Tier < 4; ++Tier)
-	{
-		AddNeonDisc(FoliageSlot, Base + FVector(0.f, 0.f, Height * (0.38f + 0.17f * Tier)), Height * (0.3f - 0.06f * Tier), FMath::Max(Width * 1.2f, 6.f));
-	}
-	AddNeonBox(FoliageSlot, Base + FVector(0.f, 0.f, Height * 0.97f), FVector(Width * 1.5f, Width * 1.5f, Height * 0.12f), 0.f);
-}
-
-void ASpinCityBuilder::BuildFountain(const FVector2D& Pos, float Radius, float Width, float Yaw)
-{
-	// A round basin with a glowing pool, a column with a smaller bowl, and eight arcing jets of water.
-	const FVector Base(Pos.X, Pos.Y, 0.f);
-	constexpr float BasinHeight = 60.f;
-	AddHull(Base + FVector(0.f, 0.f, BasinHeight * 0.5f), FVector(Radius * 2.f, Radius * 2.f, BasinHeight), Yaw, true);
-	BuildHaloRing(2, Base, Radius + Width * 0.5f, BasinHeight + 2.f, Width, Yaw);
-	AddNeonDisc(WaterSlot, Base + FVector(0.f, 0.f, BasinHeight + 1.f), Radius * 0.9f, 2.f);
-
-	const float ColumnTop = BasinHeight + Radius;
-	AddHull(Base + FVector(0.f, 0.f, ColumnTop * 0.5f), FVector(Radius * 0.2f, Radius * 0.2f, ColumnTop), Yaw, true);
-	const float BowlZ = BasinHeight + Radius * 0.55f;
-	AddHull(Base + FVector(0.f, 0.f, BowlZ), FVector(Radius * 0.76f, Radius * 0.76f, Radius * 0.08f), Yaw, true);
-	AddNeonDisc(WaterSlot, Base + FVector(0.f, 0.f, BowlZ + Radius * 0.04f + 1.f), Radius * 0.34f, 2.f);
-
-	constexpr int32 Jets = 8;
-	constexpr int32 Steps = 6;
-	for (int32 j = 0; j < Jets; ++j)
-	{
-		const float A = FMath::DegreesToRadians(Yaw + j * 360.f / Jets);
-		const FVector Out(FMath::Cos(A), FMath::Sin(A), 0.f);
-		FVector Prev = Base + FVector(0.f, 0.f, ColumnTop);
-		for (int32 s = 1; s <= Steps; ++s)
-		{
-			const float T = static_cast<float>(s) / Steps;
-			const float Z = ColumnTop + (BasinHeight + 2.f - ColumnTop) * T + 4.f * Radius * 0.35f * T * (1.f - T);
-			const FVector Next = Base + Out * (Radius * 0.8f * T) + FVector(0.f, 0.f, Z);
-			AddNeonLine(WaterSlot, Prev, Next, Width * 0.7f);
-			Prev = Next;
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------------------------
 // Landmarks
 // ---------------------------------------------------------------------------------------------
 
@@ -1439,9 +1381,6 @@ void ASpinCityBuilder::BuildHaloRing(int32 Slot, const FVector& Center, float Ra
 
 void ASpinCityBuilder::BuildLandmarks(FRandomStream& Rand)
 {
-	// Halo rings floating over the city: a smaller amber one nearer in, a vast purple one beyond.
-	BuildHaloRing(4, FVector::ZeroVector, CityRadius * 0.4f, 5200.f, 3.f, 0.f, true);
-	BuildHaloRing(3, FVector::ZeroVector, CityRadius * 0.72f, 9000.f, 3.5f, 0.f, true);
 
 	// Gateway arches spanning the avenues that lead away from the camera, twice along each.
 	for (int32 i = 0; i < NumAvenues; ++i)
@@ -1539,6 +1478,41 @@ void ASpinCityBuilder::BuildLandmarks(FRandomStream& Rand)
 }
 
 // ---------------------------------------------------------------------------------------------
+// Rolling fog
+// ---------------------------------------------------------------------------------------------
+
+void ASpinCityBuilder::BuildFog()
+{
+	// The sky dome: a sphere far bigger than the city (its material is the sky, see SetupMaterials).
+	SkyDome->SetVisibility(bNightSky && SkyMaterial != nullptr);
+	SkyDome->SetRelativeLocation(FVector::ZeroVector);
+	SkyDome->SetRelativeScale3D(FVector(20000.f)); // the engine sphere is 100 across: 1,000,000 radius
+
+	// Flat layers over the part of the city the camera looks at, from just past the dial out toward
+	// the horizon. The fog's look and drift are all in M_Fog (set up in SetupMaterials); this just
+	// places the layers - spaced more closely near the ground, where the fog is thickest.
+	const int32 UsedFogLayers = (bFogLayers && FogMaterial) ? FMath::Clamp(NumFogLayers, 0, FogLayers.Num()) : 0;
+	const float NearX = FMath::Max(DialClearRadius * 0.5f, 1500.f);
+	const float FarX = FMath::Max(FloorRadius * 0.45f, NearX + 1000.f);
+	const float HalfWidth = FloorRadius * 0.45f;
+
+	for (int32 i = 0; i < FogLayers.Num(); ++i)
+	{
+		UStaticMeshComponent* Layer = FogLayers[i];
+		const bool bUsed = i < UsedFogLayers;
+		Layer->SetVisibility(bUsed);
+		if (!bUsed)
+		{
+			continue;
+		}
+		const float T = UsedFogLayers > 1 ? static_cast<float>(i) / (UsedFogLayers - 1) : 0.f;
+		const float Height = FMath::Lerp(FogLowest, FogHighest, T * T);
+		Layer->SetRelativeLocation(FVector((NearX + FarX) * 0.5f, 0.f, Height));
+		Layer->SetRelativeScale3D(FVector(FarX - NearX, HalfWidth * 2.f, 1.f) / MeshSize);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
 // The river and its bridges
 // ---------------------------------------------------------------------------------------------
 
@@ -1548,13 +1522,65 @@ float ASpinCityBuilder::GetRiverEnd() const
 	return LandmarkRadius * 1.15f - 5800.f;
 }
 
+float ASpinCityBuilder::GetShoreX() const
+{
+	if (!bLake)
+	{
+		return 0.f;
+	}
+	// Just in front of the bridge, but always well past the plaza.
+	return FMath::Max(GrandBridgeDistance - LakeEndsBeforeBridge, PlazaRadius + 1000.f);
+}
+
+void ASpinCityBuilder::BuildLake()
+{
+	const float Shore = GetShoreX();
+	LakeWater->SetVisibility(Shore > 0.f);
+	if (Shore <= 0.f)
+	{
+		return;
+	}
+
+	// The water: one flat slab of the dark mirror, just above the floor, covering everything on the
+	// camera's side of the shoreline - out past the edges of the floor, so there's no far side to it.
+	const float Far = FloorRadius;
+	LakeWater->SetRelativeLocation(FVector((Shore - Far) * 0.5f, 0.f, 1.5f));
+	LakeWater->SetRelativeScale3D(FVector(Shore + Far, Far * 2.f, 3.f) / MeshSize);
+
+	// The shoreline: a straight embankment wall right across the level, with a neon edge along its top
+	// and a glowing waterline (the same as the river's banks), leaving a gap where the river flows out.
+	constexpr float WallHeight = 120.f;
+	const float Reach = FloorRadius * 0.6f;
+	const float RiverGap = bRiver ? RiverWidth * 0.5f : 0.f;
+	for (const float S : { -1.f, 1.f })
+	{
+		for (float Y = RiverGap; Y < Reach; Y += 3000.f)
+		{
+			const float Y1 = FMath::Min(Y + 3000.f, Reach);
+			const FVector2D Mid(Shore, S * (Y + Y1) * 0.5f);
+			const float W = LineWidthAt(Mid);
+			AddHull(FVector(Shore + 60.f, Mid.Y, WallHeight * 0.5f), FVector(120.f, Y1 - Y, WallHeight), 0.f);
+			AddNeonLine(0, FVector(Shore, S * Y, WallHeight + 2.f), FVector(Shore, S * Y1, WallHeight + 2.f), W);
+			AddNeonLine(2, FVector(Shore - 4.f, S * Y, 6.f), FVector(Shore - 4.f, S * Y1, 6.f), W * 0.8f);
+		}
+	}
+}
+
 bool ASpinCityBuilder::IsInRiverZone(const FVector2D& Pos, float Footprint) const
 {
+	const float Reach = Footprint * 0.75f;
+
+	// The open water and its shore: nothing on the camera's side of the shoreline.
+	const float Shore = GetShoreX();
+	if (Shore > 0.f && Pos.X < Shore + 400.f + Reach)
+	{
+		return true;
+	}
+
 	if (!bRiver)
 	{
 		return false;
 	}
-	const float Reach = Footprint * 0.75f;
 	const float Half = RiverWidth * 0.5f;
 
 	// The river and its embankments.
@@ -1684,14 +1710,18 @@ void ASpinCityBuilder::BuildRiver()
 		return;
 	}
 
-	const float Start = PlazaRadius + 300.f;
-	const float End = GetRiverEnd();
 	const float Half = RiverWidth * 0.5f;
+	const float Shore = GetShoreX();
+	// With the lake, the river flows out of its far shore (where the bank meets the shoreline);
+	// without it, the river starts at the plaza's edge.
+	const float Start = Shore > 0.f ? Shore : PlazaRadius + 300.f;
+	const float End = GetRiverEnd();
 
 	// The water: a dark mirror just above the floor (high enough to hide floor lines beneath it),
-	// so the neon city reflects in it.
-	Water->SetRelativeLocation(FVector((Start + End) * 0.5f, 0.f, 1.5f));
-	Water->SetRelativeScale3D(FVector(End - Start, RiverWidth, 3.f) / MeshSize);
+	// so the neon city reflects in it. A touch lower than the lake's, so where they overlap the
+	// lake's surface wins cleanly instead of flickering.
+	Water->SetRelativeLocation(FVector((Start + End) * 0.5f, 0.f, 1.25f));
+	Water->SetRelativeScale3D(FVector(End - Start, RiverWidth, 2.5f) / MeshSize);
 
 	// Embankment walls along both banks, with a neon edge along the top and a glowing waterline.
 	constexpr float WallHeight = 120.f;
@@ -1707,9 +1737,14 @@ void ASpinCityBuilder::BuildRiver()
 		}
 	}
 
-	// Walls closing off each end: at the plaza, and at the foot of the ziggurat.
+	// Walls closing off each end: at the foot of the ziggurat, and at the plaza (unless the river opens
+	// out of the lake there).
 	for (const float X : { Start - 60.f, End + 60.f })
 	{
+		if (X < Start && Shore > 0.f)
+		{
+			continue;
+		}
 		const float W = LineWidthAt(FVector2D(X, 0.f));
 		AddHull(FVector(X, 0.f, WallHeight * 0.5f), FVector(120.f, RiverWidth + 240.f, WallHeight), 0.f);
 		AddNeonLine(0, FVector(X, -Half, WallHeight + 2.f), FVector(X, Half, WallHeight + 2.f), W);
