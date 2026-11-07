@@ -575,6 +575,7 @@ void ASpinHUD::DrawRunHUD(const ASpinGameMode& GM)
 	const float CY = ScreenH * 0.5f;
 	const float Top = U(Margin);
 
+	DrawGlitches(GM);
 	DrawZoneLabel(GM);
 
 	// The top modules: run (score) on the left, level in the middle. Health sits beside the dial,
@@ -611,6 +612,81 @@ void ASpinHUD::DrawRunHUD(const ASpinGameMode& GM)
 	else
 	{
 		DrawGo(Now - GM.InvincibilityEndTime, CX, CY);
+	}
+}
+
+void ASpinHUD::DrawGlitches(const ASpinGameMode& GM)
+{
+	const ASpinClock* Clock = GM.GetClock();
+	if (!Clock)
+	{
+		return;
+	}
+
+	// Each obstacle glitching in or out, in smaller pixels than the dial's.
+	TArray<FSpinObstacleGlitch> Obstacles;
+	Clock->GetObstacleGlitches(Obstacles);
+	for (const FSpinObstacleGlitch& Obstacle : Obstacles)
+	{
+		const FVector Center = Project(Obstacle.WorldCenter);
+		const FVector Edge = Project(Obstacle.WorldCenter + FVector(0.f, Obstacle.WorldRadius, 0.f));
+		const float HalfW = FMath::Abs(Edge.X - Center.X);
+		DrawGlitchBlocks(Center.X, Center.Y, HalfW, HalfW * 0.8f, Obstacle.Strength, Obstacle.Seed, FMath::Max(3.f, U(9.f)), 0.65f, 2);
+	}
+
+	const float Glitch = Clock->GetDialGlitch();
+	if (Glitch <= 0.f)
+	{
+		return;
+	}
+
+	// The dial's rim on screen, as an ellipse.
+	const FVector Left = Project(Clock->GetDialWorldLocation(270.f, 1.f));
+	const FVector Right = Project(Clock->GetDialWorldLocation(90.f, 1.f));
+	const FVector Near = Project(Clock->GetDialWorldLocation(180.f, 1.f));
+	const FVector Far = Project(Clock->GetDialWorldLocation(0.f, 1.f));
+	const float CenterX = (Left.X + Right.X) * 0.5f;
+	const float CenterY = (Near.Y + Far.Y) * 0.5f;
+	const float HalfW = FMath::Max(1.f, FMath::Abs(Right.X - Left.X) * 0.5f);
+	const float HalfH = FMath::Max(1.f, FMath::Abs(Near.Y - Far.Y) * 0.5f);
+	DrawGlitchBlocks(CenterX, CenterY, HalfW, HalfH, Glitch, Clock->GetDialGlitchSeed(), FMath::Max(4.f, U(26.f)), 0.4f, 4);
+}
+
+void ASpinHUD::DrawGlitchBlocks(float CenterX, float CenterY, float HalfW, float HalfH, float Strength, int32 Seed, float Tile, float MaxDensity, int32 NumTears)
+{
+	if (HalfW < 1.f || HalfH < 1.f)
+	{
+		return;
+	}
+
+	const FLinearColor Magenta(1.f, 0.1f, 0.75f);
+	const FLinearColor Colors[] = { Cyan, Magenta, Gold, FLinearColor::White };
+	FRandomStream Noise(Seed);
+
+	// Chunky pixels on a fixed grid, thick at first and thinning out as it settles. See-through, so
+	// the zone and the hand can still be read through them.
+	const float Density = MaxDensity * Strength;
+	for (float Y = FMath::GridSnap(CenterY - HalfH, Tile); Y < CenterY + HalfH; Y += Tile)
+	{
+		for (float X = FMath::GridSnap(CenterX - HalfW, Tile); X < CenterX + HalfW; X += Tile)
+		{
+			const float NX = (X + Tile * 0.5f - CenterX) / HalfW;
+			const float NY = (Y + Tile * 0.5f - CenterY) / HalfH;
+			if (NX * NX + NY * NY > 1.f || Noise.FRand() > Density)
+			{
+				continue;
+			}
+			DrawRect(Fade(Colors[Noise.RandHelper(UE_ARRAY_COUNT(Colors))], Noise.FRandRange(0.25f, 0.6f)), X, Y, Tile, Tile);
+		}
+	}
+
+	// A few torn scanlines running past the edges.
+	for (int32 i = 0; i < NumTears; ++i)
+	{
+		const float Y = FMath::GridSnap(Noise.FRandRange(CenterY - HalfH, CenterY + HalfH), Tile);
+		const float W = HalfW * Noise.FRandRange(0.8f, 2.4f);
+		const float X = CenterX - W * 0.5f + Noise.FRandRange(-HalfW, HalfW) * 0.4f;
+		DrawRect(Fade(Colors[Noise.RandHelper(UE_ARRAY_COUNT(Colors))], 0.5f * Strength), X, Y, W, Tile * 0.35f);
 	}
 }
 

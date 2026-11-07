@@ -22,6 +22,19 @@ namespace
 	// The engine's built-in BasicShapeMaterial exposes a vector parameter called "Color".
 	const FName ColorParam(TEXT("Color"));
 
+	// The colours the dial and obstacles flash through while glitching (above 1, so they bloom).
+	const FLinearColor GlitchPalette[] =
+	{
+		FLinearColor(0.1f, 3.f, 3.5f), // cyan
+		FLinearColor(4.f, 0.2f, 2.8f), // magenta
+		FLinearColor(3.5f, 3.f, 0.3f), // yellow
+		FLinearColor(3.f, 3.f, 3.f),   // white
+	};
+
+	// Thickness of the neon plates on an obstacle, and how far they overhang its hull.
+	constexpr float ObstacleGlowThickness = 5.f;
+	constexpr float ObstacleGlowOverhang = 1.08f;
+
 	// The camera frames the city out to this multiple of the lit radius (plus a fixed margin), so
 	// the spreading light always stays inside the shot instead of running off the top of it.
 	constexpr float CameraLeadMultiple = 1.35f;
@@ -132,76 +145,92 @@ ASpinClock::ASpinClock()
 		return Comp;
 	};
 
-	Rim = MakeMesh(TEXT("Rim"), CylinderMesh, Root);
-	Dial = MakeMesh(TEXT("Dial"), CylinderMesh, Root);
-	Hub = MakeMesh(TEXT("Hub"), CylinderMesh, Root);
+	// Everything on the dial hangs off this, so scaling it grows the whole dial at once. All the
+	// gameplay works in the dial's own units underneath, so its size is purely visual.
+	DialPivot = CreateDefaultSubobject<USceneComponent>(TEXT("DialPivot"));
+	DialPivot->SetupAttachment(Root);
+
+	Rim = MakeMesh(TEXT("Rim"), CylinderMesh, DialPivot);
+	Dial = MakeMesh(TEXT("Dial"), CylinderMesh, DialPivot);
+	Hub = MakeMesh(TEXT("Hub"), CylinderMesh, DialPivot);
 
 	HandPivot = CreateDefaultSubobject<USceneComponent>(TEXT("HandPivot"));
-	HandPivot->SetupAttachment(Root);
+	HandPivot->SetupAttachment(DialPivot);
 	Hand = MakeMesh(TEXT("Hand"), CubeMesh, HandPivot);
 
 	for (int32 i = 0; i < NumZoneSegments; ++i)
 	{
-		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("ZoneSegment%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("ZoneSegment%d"), i), CubeMesh, DialPivot);
 		Segment->SetCastShadow(false);
 		ZoneSegments.Add(Segment);
 	}
 
 	for (int32 i = 0; i < NumZoneMarks; ++i)
 	{
-		UStaticMeshComponent* Mark = MakeMesh(*FString::Printf(TEXT("ZoneMark%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Mark = MakeMesh(*FString::Printf(TEXT("ZoneMark%d"), i), CubeMesh, DialPivot);
 		Mark->SetCastShadow(false);
 		ZoneMarks.Add(Mark);
 	}
 
 	for (int32 i = 0; i < NumRingSegments; ++i)
 	{
-		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("OuterRing%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("OuterRing%d"), i), CubeMesh, DialPivot);
 		Segment->SetCastShadow(false);
 		OuterRingSegments.Add(Segment);
 	}
 
 	for (int32 i = 0; i < NumRingSegments; ++i)
 	{
-		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("InnerRing%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("InnerRing%d"), i), CubeMesh, DialPivot);
 		Segment->SetCastShadow(false);
 		InnerRingSegments.Add(Segment);
 	}
 
 	for (int32 i = 0; i < NumTicks; ++i)
 	{
-		UStaticMeshComponent* Tick = MakeMesh(*FString::Printf(TEXT("Tick%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Tick = MakeMesh(*FString::Printf(TEXT("Tick%d"), i), CubeMesh, DialPivot);
 		Tick->SetCastShadow(false);
 		TickMarks.Add(Tick);
 	}
 
 	for (int32 i = 0; i < NumTrackSegments; ++i)
 	{
-		UStaticMeshComponent* Inner = MakeMesh(*FString::Printf(TEXT("TrackInner%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Inner = MakeMesh(*FString::Printf(TEXT("TrackInner%d"), i), CubeMesh, DialPivot);
 		Inner->SetCastShadow(false);
 		TrackInnerSegments.Add(Inner);
 
-		UStaticMeshComponent* Outer = MakeMesh(*FString::Printf(TEXT("TrackOuter%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Outer = MakeMesh(*FString::Printf(TEXT("TrackOuter%d"), i), CubeMesh, DialPivot);
 		Outer->SetCastShadow(false);
 		TrackOuterSegments.Add(Outer);
 	}
 
 	for (int32 i = 0; i < NumObstacleSlots; ++i)
 	{
-		ObstacleMeshes.Add(MakeMesh(*FString::Printf(TEXT("Obstacle%d"), i), CylinderMesh, Root));
-		UStaticMeshComponent* Shadow = MakeMesh(*FString::Printf(TEXT("ObstacleShadow%d"), i), CylinderMesh, Root);
+		ObstacleMeshes.Add(MakeMesh(*FString::Printf(TEXT("Obstacle%d"), i), CylinderMesh, DialPivot));
+		UStaticMeshComponent* Shadow = MakeMesh(*FString::Printf(TEXT("ObstacleShadow%d"), i), CylinderMesh, DialPivot);
 		Shadow->SetCastShadow(false);
 		ObstacleShadows.Add(Shadow);
+
+		UStaticMeshComponent* TopGlow = MakeMesh(*FString::Printf(TEXT("ObstacleTopGlow%d"), i), CylinderMesh, DialPivot);
+		TopGlow->SetCastShadow(false);
+		ObstacleTopGlows.Add(TopGlow);
+
+		UStaticMeshComponent* BaseGlow = MakeMesh(*FString::Printf(TEXT("ObstacleBaseGlow%d"), i), CylinderMesh, DialPivot);
+		BaseGlow->SetCastShadow(false);
+		ObstacleBaseGlows.Add(BaseGlow);
 	}
 	ObstacleStates.SetNum(NumObstacleSlots);
 
 	for (int32 i = 0; i < NumSparks; ++i)
 	{
-		UStaticMeshComponent* Spark = MakeMesh(*FString::Printf(TEXT("Spark%d"), i), CubeMesh, Root);
+		UStaticMeshComponent* Spark = MakeMesh(*FString::Printf(TEXT("Spark%d"), i), CubeMesh, DialPivot);
 		Spark->SetCastShadow(false);
 		SparkMeshes.Add(Spark);
 	}
 	Sparks.SetNum(NumSparks);
+
+	DialGrowthSteps.Add(FSpinDialGrowthStep(0.35f, 1.4f)); // out to the city's 900 floor ring
+	DialGrowthSteps.Add(FSpinDialGrowthStep(0.7f, 2.f));   // out to the 1300 ring
 
 	// Music: flat 2D stereo, started by UpdateMusic. Counting as UI sound keeps it going through a pause.
 	auto MakeMusicPlayer = [this](FName Name) -> UAudioComponent*
@@ -262,6 +291,18 @@ void ASpinClock::BeginPlay()
 	{
 		PrevHandAngle = GM->HandAngle;
 	}
+
+	// A dial saved into a level keeps the attachments it was saved with, which can be from before
+	// DialPivot existed - so make sure everything on the dial really hangs off it.
+	const TArray<TObjectPtr<USceneComponent>> Attached = Root->GetAttachChildren();
+	for (USceneComponent* Child : Attached)
+	{
+		if (Child->IsA<UStaticMeshComponent>() || Child == HandPivot)
+		{
+			Child->AttachToComponent(DialPivot, FAttachmentTransformRules::KeepRelativeTransform);
+		}
+	}
+
 	BuildVisuals();
 }
 
@@ -299,6 +340,16 @@ void ASpinClock::BuildVisuals()
 	{
 		Shadow->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, 1.f / 100.f));
 		Shadow->SetVisibility(false);
+	}
+	// Their neon plates: thin caps a touch wider than the hull.
+	const float GlowSize = ObstacleRadius * 2.f * ObstacleGlowOverhang / 100.f;
+	for (const TArray<TObjectPtr<UStaticMeshComponent>>* Glows : { &ObstacleTopGlows, &ObstacleBaseGlows })
+	{
+		for (UStaticMeshComponent* Glow : *Glows)
+		{
+			Glow->SetRelativeScale3D(FVector(GlowSize, GlowSize, ObstacleGlowThickness / 100.f));
+			Glow->SetVisibility(false);
+		}
 	}
 
 	// Sparks: tiny glowing blocks, hidden until needed.
@@ -367,10 +418,11 @@ void ASpinClock::BuildVisuals()
 			Spark->SetMaterial(0, SparkMID);
 		}
 
+		// The obstacles' hulls are dark, like the city's buildings, with just a hint of their neon's colour.
 		ObstacleMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
 		if (ObstacleMID)
 		{
-			ObstacleMID->SetVectorParameterValue(ColorParam, ObstacleColor);
+			ObstacleMID->SetVectorParameterValue(ColorParam, ObstacleColor * 0.03f);
 		}
 		for (UStaticMeshComponent* Post : ObstacleMeshes)
 		{
@@ -380,18 +432,28 @@ void ASpinClock::BuildVisuals()
 		HighObstacleMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
 		if (HighObstacleMID)
 		{
-			HighObstacleMID->SetVectorParameterValue(ColorParam, HighObstacleColor);
+			HighObstacleMID->SetVectorParameterValue(ColorParam, HighObstacleColor * 0.03f);
 		}
 
 		// A dark tint of the high posts' colour.
 		ShadowMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
 		if (ShadowMID)
 		{
-			ShadowMID->SetVectorParameterValue(ColorParam, HighObstacleColor * 0.12f);
+			ShadowMID->SetVectorParameterValue(ColorParam, HighObstacleColor * 0.03f);
 		}
 		for (UStaticMeshComponent* Shadow : ObstacleShadows)
 		{
 			Shadow->SetMaterial(0, ShadowMID);
+		}
+
+		// Each obstacle's neon has a material of its own, since each fades on its own.
+		ObstacleGlowMIDs.Reset();
+		for (int32 i = 0; i < NumObstacleSlots; ++i)
+		{
+			UMaterialInstanceDynamic* GlowMID = UMaterialInstanceDynamic::Create(NeonMaterial ? NeonMaterial.Get() : BaseMaterial.Get(), this);
+			ObstacleGlowMIDs.Add(GlowMID);
+			ObstacleTopGlows[i]->SetMaterial(0, GlowMID);
+			ObstacleBaseGlows[i]->SetMaterial(0, GlowMID);
 		}
 	}
 
@@ -561,7 +623,83 @@ void ASpinClock::Tick(float DeltaSeconds)
 		SetCameraBase(CameraBlend);
 	}
 
+	UpdateDialGrowth(DeltaSeconds);
 	UpdateCameraMotion(DeltaSeconds);
+}
+
+void ASpinClock::UpdateDialGrowth(float DeltaSeconds)
+{
+	// The biggest step the camera has pulled back far enough for.
+	float TargetScale = 1.f;
+	for (const FSpinDialGrowthStep& Step : DialGrowthSteps)
+	{
+		if (CameraBlend >= Step.CameraBlend)
+		{
+			TargetScale = FMath::Max(TargetScale, Step.Scale);
+		}
+	}
+
+	const float OldScale = DialScale;
+	if (DialGrowTo < 0.f)
+	{
+		DialScale = DialGrowFrom = DialGrowTo = TargetScale; // first frame: no animation from nothing
+	}
+	else if (TargetScale != DialGrowTo)
+	{
+		DialGrowFrom = DialScale;
+		DialGrowTo = TargetScale;
+		DialGrowElapsed = 0.f;
+	}
+
+	const bool bGrowing = DialGrowTo > DialGrowFrom;
+	const float Duration = FMath::Max(0.01f, bGrowing ? DialGrowTime : DialShrinkTime);
+	const float PrevElapsed = DialGrowElapsed;
+	DialGrowElapsed += DeltaSeconds;
+	const float Alpha = FMath::Clamp(DialGrowElapsed / Duration, 0.f, 1.f);
+
+	// Mid-change the dial glitches: every few frames it lands on a random size, position and colour,
+	// more and more likely to be the final size, until it locks in. The HUD draws its blocks from the
+	// same seed, so they all flicker together.
+	FVector Jitter = FVector::ZeroVector;
+	if (Alpha < 1.f && DialGrowFrom != DialGrowTo)
+	{
+		DialGlitchSeed = static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(DialGrowElapsed * DialGlitchRate)), 0x51A3u));
+		const FRandomStream Glitch(DialGlitchSeed);
+
+		const float Roll = Glitch.FRand();
+		DialScale = Roll < Alpha ? DialGrowTo
+			: Roll < Alpha + 0.25f ? FMath::Lerp(DialGrowFrom, DialGrowTo, Glitch.FRand())
+			: DialGrowFrom;
+
+		Jitter = FVector(Glitch.FRandRange(-1.f, 1.f), Glitch.FRandRange(-1.f, 1.f), 0.f) * DialGlitchJitter * (1.f - Alpha);
+
+		DialGlitchTint = GlitchPalette[Glitch.RandHelper(UE_ARRAY_COUNT(GlitchPalette))];
+		DialGlitch = 1.f - Alpha * Alpha * Alpha;
+	}
+	else
+	{
+		DialScale = DialGrowTo;
+		DialGlitch = 0.f;
+	}
+
+	// Locking into a bigger size: the rings flare, and mid-run the dial lands with a thump.
+	const ASpinGameMode* GM = GameMode.Get();
+	if (bGrowing && PrevElapsed < Duration && DialGrowElapsed >= Duration && GM && GM->State == ESpinState::Playing)
+	{
+		DialGrowFlash = 1.f;
+		PlayShake(DialGrowShake);
+	}
+	DialGrowFlash = FMath::Max(0.f, DialGrowFlash - DeltaSeconds * 3.f);
+
+	// Only when they change: these move every mesh on the dial.
+	if (DialScale != OldScale || !DialPivot->GetRelativeScale3D().Equals(FVector(DialScale)))
+	{
+		DialPivot->SetRelativeScale3D(FVector(DialScale));
+	}
+	if (!DialPivot->GetRelativeLocation().Equals(Jitter))
+	{
+		DialPivot->SetRelativeLocation(Jitter);
+	}
 }
 
 void ASpinClock::UpdateMusic(const ASpinGameMode& GM)
@@ -573,11 +711,12 @@ void ASpinClock::UpdateMusic(const ASpinGameMode& GM)
 	}
 	bWasGameOver = bGameOver;
 
-	UAudioComponent* Wanted = GM.IsInRun() ? RunMusicPlayer : MenuMusicPlayer;
+	// The game-over screen has no music of its own: the sting has it to itself.
+	UAudioComponent* Wanted = bGameOver ? nullptr : GM.IsInRun() ? RunMusicPlayer.Get() : MenuMusicPlayer.Get();
 	if (Wanted == ActiveMusicPlayer)
 	{
 		// A run track without Looping has finished: on to another.
-		if (Wanted == RunMusicPlayer && !Wanted->IsPlaying())
+		if (Wanted && Wanted == RunMusicPlayer && !Wanted->IsPlaying())
 		{
 			StartNextRunTrack();
 		}
@@ -593,7 +732,7 @@ void ASpinClock::UpdateMusic(const ASpinGameMode& GM)
 	{
 		StartNextRunTrack();
 	}
-	else if (MenuMusic)
+	else if (Wanted && MenuMusic)
 	{
 		Wanted->SetSound(MenuMusic);
 		Wanted->FadeIn(MusicFadeTime);
@@ -832,29 +971,29 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 
 	// Successful hits flare the rings and the fill light, then fade back (the city does the same,
 	// see ASpinCityFX).
-	const float Pulse = GM.GetHitPulse();
+	const float Pulse = FMath::Max(GM.GetHitPulse(), DialGrowFlash);
 	const float RingGlow = (1.f + RingHitPulseBoost * Pulse) * Dim;
 
 	if (OuterRingMID)
 	{
 		// The whole rim glows the colour of whichever button the next zone needs.
-		OuterRingMID->SetVectorParameterValue(ColorParam, ZoneBase * RingGlow);
+		OuterRingMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : ZoneBase * RingGlow);
 	}
 
 	if (InnerRingMID)
 	{
-		InnerRingMID->SetVectorParameterValue(ColorParam, InnerRingColor * RingGlow);
+		InnerRingMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : InnerRingColor * RingGlow);
 	}
 
 	// Ticks and track flare too, but more gently than the rings so they stay in the background.
 	const float DetailGlow = (1.f + RingHitPulseBoost * 0.5f * Pulse) * Dim;
 	if (TickMID)
 	{
-		TickMID->SetVectorParameterValue(ColorParam, TickColor * DetailGlow);
+		TickMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : TickColor * DetailGlow);
 	}
 	if (TrackMID)
 	{
-		TrackMID->SetVectorParameterValue(ColorParam, TrackColor * DetailGlow);
+		TrackMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : TrackColor * DetailGlow);
 	}
 
 	if (FillLight)
@@ -919,7 +1058,7 @@ bool ASpinClock::IsLiftAvailable() const
 
 	for (const FObstacleState& S : ObstacleStates)
 	{
-		const bool bOut = S.Phase == EObstaclePhase::SlidingIn || S.Phase == EObstaclePhase::Waiting;
+		const bool bOut = S.Phase == EObstaclePhase::FadingIn || S.Phase == EObstaclePhase::Waiting;
 		if (bOut && !S.bPassed && !S.bHigh)
 		{
 			return true;
@@ -943,7 +1082,7 @@ void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM, float Moved)
 
 	for (FObstacleState& S : ObstacleStates)
 	{
-		const bool bOut = S.Phase == EObstaclePhase::SlidingIn || S.Phase == EObstaclePhase::Waiting;
+		const bool bOut = S.Phase == EObstaclePhase::FadingIn || S.Phase == EObstaclePhase::Waiting;
 		if (!bOut || S.bPassed)
 		{
 			continue;
@@ -973,17 +1112,9 @@ void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float Ahead
 
 		const float Rad = FMath::DegreesToRadians(AngleDeg);
 		const float Rho = DialRadius * RadiusFraction;
-		S.Target = FVector2D(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad));
-
-		// It enters from whichever side of the dial it will rest on (random if it's near the middle).
-		const float Side = (FMath::Abs(S.Target.Y) < DialRadius * 0.1f)
-			? (FMath::RandBool() ? 1.f : -1.f)
-			: FMath::Sign(S.Target.Y);
-		S.Start = FVector2D(S.Target.X, Side * DialRadius * 1.35f);
-
-		S.Current = S.Start;
+		S.Current = FVector2D(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad));
 		S.Elapsed = 0.f;
-		S.Phase = EObstaclePhase::SlidingIn;
+		S.Phase = EObstaclePhase::FadingIn;
 
 		// Track how far the hand still has to go, so passing it can be detected.
 		const float Reach = ObstacleRadius + HandWidth * 0.5f;
@@ -995,18 +1126,16 @@ void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float Ahead
 		// High posts are flat squares, so they read differently from the round low posts at a glance.
 		UStaticMesh* Shape = bHigh ? SquarePostMesh.Get() : RoundPostMesh.Get();
 		UStaticMeshComponent* Post = ObstacleMeshes[i];
-		Post->SetVisibility(true);
 		if (Shape)
 		{
 			Post->SetStaticMesh(Shape);
 			ObstacleShadows[i]->SetStaticMesh(Shape);
+			ObstacleTopGlows[i]->SetStaticMesh(Shape);
+			ObstacleBaseGlows[i]->SetStaticMesh(Shape);
 		}
 		Post->SetMaterial(0, bHigh ? HighObstacleMID.Get() : ObstacleMID.Get());
 		Post->SetRelativeScale3D(FVector(ObstacleRadius * 2.f / 100.f, ObstacleRadius * 2.f / 100.f, (bHigh ? HighObstacleHeight : ObstacleHeight) / 100.f));
-		Post->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
-		ObstacleShadows[i]->SetVisibility(bHigh);
-		ObstacleShadows[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, 0.6f));
-		ApplyObstacleFacing(i);
+		PlaceObstacle(i, S.Current);
 		return;
 	}
 }
@@ -1015,11 +1144,27 @@ void ASpinClock::RetireObstacles()
 {
 	for (FObstacleState& S : ObstacleStates)
 	{
-		if (S.Phase == EObstaclePhase::SlidingIn || S.Phase == EObstaclePhase::Waiting)
+		if (S.Phase == EObstaclePhase::FadingIn || S.Phase == EObstaclePhase::Waiting)
 		{
-			S.From = S.Current;
-			S.Elapsed = 0.f;
-			S.Phase = EObstaclePhase::SlidingOut;
+			// One still fading in leaves from how far it had got, rather than popping to full first.
+			const float Presence = S.Phase == EObstaclePhase::FadingIn ? FMath::Clamp(S.Elapsed / ObstacleFadeInTime, 0.f, 1.f) : 1.f;
+			S.Elapsed = ObstacleFadeOutTime * (1.f - Presence);
+			S.Phase = EObstaclePhase::FadingOut;
+		}
+	}
+}
+
+void ASpinClock::GetObstacleGlitches(TArray<FSpinObstacleGlitch>& OutGlitches) const
+{
+	for (const FObstacleState& S : ObstacleStates)
+	{
+		if (S.Phase != EObstaclePhase::Inactive && S.Glitch > 0.f)
+		{
+			FSpinObstacleGlitch& Glitch = OutGlitches.AddDefaulted_GetRef();
+			Glitch.WorldCenter = DialPivot->GetComponentTransform().TransformPosition(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
+			Glitch.WorldRadius = ObstacleRadius * 1.5f * DialScale;
+			Glitch.Strength = S.Glitch;
+			Glitch.Seed = S.GlitchSeed;
 		}
 	}
 }
@@ -1036,56 +1181,85 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 
 		S.Elapsed += DeltaSeconds;
 
-		switch (S.Phase)
+		// How much of it is there (0..1), and how hard it's glitching.
+		float Presence = 1.f;
+		S.Glitch = 0.f;
+		if (S.Phase == EObstaclePhase::FadingIn)
 		{
-		case EObstaclePhase::SlidingIn:
-		{
-			const float Alpha = FMath::Clamp(S.Elapsed / FMath::Max(0.01f, ObstacleSlideInTime), 0.f, 1.f);
-			const float Eased = 1.f - FMath::Pow(1.f - Alpha, 3.f); // fast start, soft stop
-			S.Current = S.Start + (S.Target - S.Start) * Eased;
-			if (Alpha >= 1.f)
+			Presence = FMath::Clamp(S.Elapsed / ObstacleFadeInTime, 0.f, 1.f);
+			S.Glitch = 1.f - Presence * Presence;
+			if (Presence >= 1.f)
 			{
 				S.Phase = EObstaclePhase::Waiting;
 			}
-			break;
 		}
-
-		case EObstaclePhase::Waiting:
-			S.Current = S.Target;
-			break;
-
-		case EObstaclePhase::SlidingOut:
+		else if (S.Phase == EObstaclePhase::FadingOut)
 		{
-			const float Alpha = FMath::Clamp(S.Elapsed / FMath::Max(0.01f, ObstacleSlideOutTime), 0.f, 1.f);
-			const float Eased = Alpha * Alpha; // slow start, fast exit
-			S.Current = S.From + (S.Start - S.From) * Eased;
+			const float Alpha = FMath::Clamp(S.Elapsed / ObstacleFadeOutTime, 0.f, 1.f);
+			Presence = 1.f - Alpha;
+			S.Glitch = FMath::Sin(Alpha * PI);
 			if (Alpha >= 1.f)
 			{
 				S.Phase = EObstaclePhase::Inactive;
-				ObstacleMeshes[i]->SetVisibility(false);
-				ObstacleShadows[i]->SetVisibility(false);
+				S.Glitch = 0.f;
+				ShowObstacle(i, false);
+				continue;
 			}
-			break;
 		}
 
-		default:
-			break;
+		// The dark hull barely shows, so the neon's brightness is what reads as the fade. Glitching
+		// on top of that, it blinks, jumps about and flashes colours - seen, not felt: the hit test
+		// uses its true position (see IsHandHittingObstacle).
+		bool bShown = true;
+		FVector2D Jitter = FVector2D::ZeroVector;
+		FLinearColor Glow = (S.bHigh ? HighObstacleColor : ObstacleColor) * Presence;
+		if (S.Glitch > 0.f)
+		{
+			S.GlitchSeed = static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(S.Elapsed * DialGlitchRate)), static_cast<uint32>(i + 1)));
+			const FRandomStream Noise(S.GlitchSeed);
+			bShown = Noise.FRand() < 0.35f + 0.65f * Presence;
+			Jitter = FVector2D(Noise.FRandRange(-1.f, 1.f), Noise.FRandRange(-1.f, 1.f)) * ObstacleRadius * 0.2f * (1.f - Presence);
+			if (Noise.FRand() < 0.35f)
+			{
+				Glow = GlitchPalette[Noise.RandHelper(UE_ARRAY_COUNT(GlitchPalette))];
+			}
 		}
 
-		ObstacleMeshes[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, GetObstacleCenterZ(S)));
-		ObstacleShadows[i]->SetRelativeLocation(FVector(S.Current.X, S.Current.Y, 0.6f));
-		ApplyObstacleFacing(i);
+		ShowObstacle(i, bShown);
+		PlaceObstacle(i, S.Current + Jitter);
+		if (ObstacleGlowMIDs.IsValidIndex(i) && ObstacleGlowMIDs[i])
+		{
+			ObstacleGlowMIDs[i]->SetVectorParameterValue(ColorParam, Glow);
+		}
 	}
 }
 
-void ASpinClock::ApplyObstacleFacing(int32 Index)
+void ASpinClock::ShowObstacle(int32 Index, bool bShown)
 {
+	ObstacleMeshes[Index]->SetVisibility(bShown);
+	ObstacleTopGlows[Index]->SetVisibility(bShown);
+	ObstacleBaseGlows[Index]->SetVisibility(bShown);
+	ObstacleShadows[Index]->SetVisibility(bShown && ObstacleStates[Index].bHigh);
+}
+
+void ASpinClock::PlaceObstacle(int32 Index, const FVector2D& Position)
+{
+	const FObstacleState& S = ObstacleStates[Index];
+	const float Bottom = S.bHigh ? HighObstacleBottom : 3.f;
+	const float Top = S.bHigh ? HighObstacleBottom + HighObstacleHeight : ObstacleHeight;
+
+	ObstacleMeshes[Index]->SetRelativeLocation(FVector(Position.X, Position.Y, GetObstacleCenterZ(S)));
+	ObstacleShadows[Index]->SetRelativeLocation(FVector(Position.X, Position.Y, 0.6f));
+	ObstacleTopGlows[Index]->SetRelativeLocation(FVector(Position.X, Position.Y, Top));
+	ObstacleBaseGlows[Index]->SetRelativeLocation(FVector(Position.X, Position.Y, Bottom));
+
 	// Squares turn to face the hub, so their leading edge lies along the hand as it sweeps in -
 	// which keeps what you see in line with the hit test (IsHandHittingObstacle).
-	const FObstacleState& S = ObstacleStates[Index];
 	const FRotator Facing(0.f, FMath::RadiansToDegrees(FMath::Atan2(S.Current.Y, S.Current.X)), 0.f);
 	ObstacleMeshes[Index]->SetRelativeRotation(Facing);
 	ObstacleShadows[Index]->SetRelativeRotation(Facing);
+	ObstacleTopGlows[Index]->SetRelativeRotation(Facing);
+	ObstacleBaseGlows[Index]->SetRelativeRotation(Facing);
 }
 
 bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh) const
@@ -1105,7 +1279,7 @@ bool ASpinClock::IsHandHittingObstacle(float HandAngleDeg, bool* bOutHigh) const
 	{
 		// Obstacles that are leaving are harmless: the hand reverses right after a hit and would
 		// otherwise run into the post it just passed through no fault of the player.
-		if (S.Phase == EObstaclePhase::Inactive || S.Phase == EObstaclePhase::SlidingOut)
+		if (S.Phase == EObstaclePhase::Inactive || S.Phase == EObstaclePhase::FadingOut)
 		{
 			continue;
 		}
@@ -1190,5 +1364,5 @@ FVector ASpinClock::GetDialWorldLocation(float Angle, float RadiusFraction) cons
 {
 	const float Rad = FMath::DegreesToRadians(Angle);
 	const FVector Direction(FMath::Cos(Rad), FMath::Sin(Rad), 0.f);
-	return GetActorLocation() + Direction * (DialRadius * RadiusFraction) + FVector(0.f, 0.f, 12.f);
+	return GetActorLocation() + Direction * (DialRadius * RadiusFraction * DialScale) + FVector(0.f, 0.f, 12.f);
 }

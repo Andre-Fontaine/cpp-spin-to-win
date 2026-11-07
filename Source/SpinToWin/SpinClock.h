@@ -28,9 +28,9 @@ class ASpinCityFX;
 enum class EObstaclePhase : uint8
 {
 	Inactive,
-	SlidingIn,
+	FadingIn,
 	Waiting,
-	SlidingOut
+	FadingOut
 };
 
 struct FObstacleState
@@ -38,11 +38,12 @@ struct FObstacleState
 	EObstaclePhase Phase = EObstaclePhase::Inactive;
 	float Elapsed = 0.f;
 
-	/** Positions on the dial plane, relative to the clock actor. */
-	FVector2D Start = FVector2D::ZeroVector;   // off the side of the dial
-	FVector2D Target = FVector2D::ZeroVector;  // resting place on the dial
-	FVector2D From = FVector2D::ZeroVector;    // where a slide-out began
+	/** Where it stands on the dial plane, relative to the clock actor. */
 	FVector2D Current = FVector2D::ZeroVector;
+
+	/** How strongly it's glitching in or out (0 once settled), and the seed for this jump of the glitch. */
+	float Glitch = 0.f;
+	int32 GlitchSeed = 0;
 
 	/** Degrees the hand still has to travel to reach this obstacle (negative once it is beyond it). */
 	float RemainingDeg = 0.f;
@@ -55,6 +56,33 @@ struct FObstacleState
 
 	/** A high post: it floats above the dial, so the hand passes under it - unless it's lifted. */
 	bool bHigh = false;
+};
+
+/** An obstacle glitching in or out, for the HUD to draw its pixel blocks over. */
+struct FSpinObstacleGlitch
+{
+	FVector WorldCenter = FVector::ZeroVector;
+	float WorldRadius = 0.f;
+	float Strength = 0.f;
+	int32 Seed = 0;
+};
+
+/** One step of the dial growing as the camera pulls back (see ASpinClock::DialGrowthSteps). */
+USTRUCT(BlueprintType)
+struct FSpinDialGrowthStep
+{
+	GENERATED_BODY()
+
+	FSpinDialGrowthStep() = default;
+	FSpinDialGrowthStep(float InCameraBlend, float InScale) : CameraBlend(InCameraBlend), Scale(InScale) {}
+
+	/** How far the camera has moved from the close-up to the wide shot: 0 to 1. */
+	UPROPERTY(EditAnywhere, Category = "Clock")
+	float CameraBlend = 0.f;
+
+	/** The dial's size from there on, as a multiple of its normal size. */
+	UPROPERTY(EditAnywhere, Category = "Clock")
+	float Scale = 1.f;
 };
 
 UCLASS()
@@ -94,15 +122,23 @@ public:
 	/** True when the hand is lifted clearly off the dial (it turns cyan). Hitting zones works at any height. */
 	bool IsHandRaised() const;
 
+	/** 1 as the dial starts glitching to a new size, falling to 0 once it has locked in. For the
+	 *  HUD's pixel blocks, along with a seed that changes with each jump of the glitch. */
+	float GetDialGlitch() const { return DialGlitch; }
+	int32 GetDialGlitchSeed() const { return DialGlitchSeed; }
+
 	// ---------------- Obstacles ----------------
 
-	/** Slide an obstacle in from the side so it comes to rest at this angle / radius on the dial.
-	 *  A high one floats above the dial instead of standing on it (see FObstacleState::bHigh). */
+	/** Glitch an obstacle in at this angle / radius on the dial. A high one floats above the dial
+	 *  instead of standing on it (see FObstacleState::bHigh). */
 	void SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh = false);
 	// AheadDeg = how many degrees ahead of the hand (in its direction of travel) the obstacle is.
 
-	/** Slide every current obstacle back out of the dial. */
+	/** Glitch every current obstacle back out. */
 	void RetireObstacles();
+
+	/** The obstacles glitching in or out right now, for the HUD. */
+	void GetObstacleGlitches(TArray<FSpinObstacleGlitch>& OutGlitches) const;
 
 	/** True if the hand, at the given angle and its current height, is touching an obstacle: a low
 	 *  one while not lifted clear of it, or a high one while lifted at all. bOutHigh says which. */
@@ -125,8 +161,7 @@ public:
 	/** Starts a different random track from RunMusic. */
 	void StartNextRunTrack();
 
-	/** Plays behind the menus and the game-over screen. Any empty slot just stays silent. Turn on
-	 *  Looping on the sound itself. */
+	/** Plays behind the menus. Any empty slot just stays silent. Turn on Looping on the sound itself. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Music")
 	TObjectPtr<USoundBase> MenuMusic;
 
@@ -135,7 +170,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Music")
 	TArray<TObjectPtr<USoundBase>> RunMusic;
 
-	/** Plays once when a run ends, over the crossfade back to the menu music. */
+	/** Plays once when a run ends, as the run music fades out. No music follows it until the player
+	 *  leaves the game-over screen. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Music")
 	TObjectPtr<USoundBase> GameOverSting;
 
@@ -155,6 +191,32 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float DialThickness = 20.f;
+
+	/** The dial steps up in size as the camera pulls back, so it stays readable from the wide shot,
+	 *  spreading out over the rings on the city floor. It shrinks again as the camera swoops back in.
+	 *  Purely visual: hit detection doesn't change. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Growth")
+	TArray<FSpinDialGrowthStep> DialGrowthSteps;
+
+	/** Seconds the dial glitches for on its way to a bigger size, and how hard it shakes the camera
+	 *  (0..1) as it locks in during a run. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Growth", meta = (ClampMin = "0.01"))
+	float DialGrowTime = 0.8f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Growth", meta = (ClampMin = "0", ClampMax = "1"))
+	float DialGrowShake = 0.2f;
+
+	/** Seconds to glitch back down when the camera returns. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Growth", meta = (ClampMin = "0.01"))
+	float DialShrinkTime = 0.5f;
+
+	/** How many times a second the glitch jumps to a new size, position and colour. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Growth", meta = (ClampMin = "1"))
+	float DialGlitchRate = 20.f;
+
+	/** How far the dial jumps sideways at the start of a glitch (world units), settling to nothing. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Growth", meta = (ClampMin = "0"))
+	float DialGlitchJitter = 30.f;
 
 	/** Hand length as a fraction of the dial radius. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
@@ -291,8 +353,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float ObstacleHeight = 90.f;
 
+	/** The neon on a low post (values above 1 bloom). Its dark hull is a faint tint of this. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
-	FLinearColor ObstacleColor = FLinearColor(0.95f, 0.3f, 0.1f);
+	FLinearColor ObstacleColor = FLinearColor(4.f, 0.9f, 0.15f);
 
 	/** High posts float this far above the dial (world units). Lifting the hand at all reaches
 	 *  them; a resting hand passes underneath. */
@@ -303,14 +366,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
 	float HighObstacleHeight = 16.f;
 
+	/** The neon on a high post. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
-	FLinearColor HighObstacleColor = FLinearColor(0.7f, 0.15f, 1.f);
+	FLinearColor HighObstacleColor = FLinearColor(3.f, 0.4f, 4.5f);
 
-	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
-	float ObstacleSlideInTime = 0.4f;
+	/** Seconds an obstacle takes to glitch in and out. It can be hit from the moment it appears. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles", meta = (ClampMin = "0.01"))
+	float ObstacleFadeInTime = 0.3f;
 
-	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles")
-	float ObstacleSlideOutTime = 0.3f;
+	UPROPERTY(EditAnywhere, Category = "Clock|Obstacles", meta = (ClampMin = "0.01"))
+	float ObstacleFadeOutTime = 0.3f;
 
 	// ---------------- Camera ----------------
 
@@ -388,6 +453,7 @@ private:
 	void UpdateZone(const ASpinGameMode& GM);
 	void UpdateColors(const ASpinGameMode& GM);
 	void UpdateMusic(const ASpinGameMode& GM);
+	void UpdateDialGrowth(float DeltaSeconds);
 	void UpdateObstacles(float DeltaSeconds);
 	void UpdateObstaclePassing(ASpinGameMode& GM, float Moved);
 
@@ -412,6 +478,10 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> Root;
+
+	/** Everything on the dial hangs off this, and it's what scales (see DialGrowthSteps). */
+	UPROPERTY()
+	TObjectPtr<USceneComponent> DialPivot;
 
 	UPROPERTY()
 	TObjectPtr<USceneComponent> HandPivot;
@@ -456,6 +526,17 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleShadows;
 
+	/** Glowing neon plates capping each obstacle's dark hull, top and bottom. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleTopGlows;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> ObstacleBaseGlows;
+
+	/** One per obstacle, since each fades on its own. */
+	UPROPERTY()
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> ObstacleGlowMIDs;
+
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> SparkMeshes;
 
@@ -471,7 +552,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UAudioComponent> RunMusicPlayer;
 
-	/** Whichever of the two is playing, or null before the first frame. */
+	/** Whichever of the two is playing, or null before the first frame and on the game-over screen. */
 	UPROPERTY()
 	TObjectPtr<UAudioComponent> ActiveMusicPlayer;
 
@@ -531,8 +612,12 @@ private:
 	/** Where an obstacle's mesh sits: its centre height, standing on the dial or floating. */
 	float GetObstacleCenterZ(const FObstacleState& S) const;
 
-	/** Turn an obstacle (and its shadow) to face the hub. Only visible on the square high posts. */
-	void ApplyObstacleFacing(int32 Index);
+	/** Moves an obstacle's parts to this spot, turned to face the hub (which only shows on the
+	 *  square high posts). */
+	void PlaceObstacle(int32 Index, const FVector2D& Position);
+
+	/** Shows or hides an obstacle's parts. */
+	void ShowObstacle(int32 Index, bool bShown);
 
 	TWeakObjectPtr<ASpinGameMode> GameMode;
 
@@ -565,6 +650,18 @@ private:
 	float CameraBlend = -1.f;
 	float CameraBlendRate = 0.f;
 	float SwayTime = 0.f;
+
+	/** The dial's current size, and the animation towards DialGrowTo (below 0 = not started). */
+	float DialScale = 1.f;
+	float DialGrowFrom = 1.f;
+	float DialGrowTo = -1.f;
+	float DialGrowElapsed = 0.f;
+	/** 1 as a step outward lands, fading to 0: flares the rings. */
+	float DialGrowFlash = 0.f;
+	/** How strong the current glitch is (see GetDialGlitch), its colour, and its seed. */
+	float DialGlitch = 0.f;
+	FLinearColor DialGlitchTint = FLinearColor::White;
+	int32 DialGlitchSeed = 0;
 
 	/** The track from RunMusic played last, so the next one can be a different one. */
 	UPROPERTY()

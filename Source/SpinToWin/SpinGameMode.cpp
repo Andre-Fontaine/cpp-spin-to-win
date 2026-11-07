@@ -2659,7 +2659,7 @@ void ASpinGameMode::PickNextPrompt()
 
 void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 {
-	// Old obstacles slide away whenever a new target is placed.
+	// Old obstacles glitch away whenever a new target is placed.
 	if (Clock)
 	{
 		Clock->RetireObstacles();

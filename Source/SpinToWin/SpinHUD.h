@@ -127,6 +127,13 @@ private:
 	/** The key the current zone needs, floating over the zone itself (lit while the hand is in it). */
 	void DrawZoneLabel(const ASpinGameMode& GM);
 
+	/** The pixel blocks over the dial while it glitches to a new size, and over obstacles glitching in or out. */
+	void DrawGlitches(const ASpinGameMode& GM);
+
+	/** Random chunky pixels on a grid inside an ellipse, plus torn scanlines past its edges. Seed
+	 *  picks the pattern; Strength 1 fills MaxDensity of the tiles, thinning to nothing at 0. */
+	void DrawGlitchBlocks(float CenterX, float CenterY, float HalfW, float HalfH, float Strength, int32 Seed, float Tile, float MaxDensity, int32 NumTears);
+
 	/** Top-left (Endless): score, combo multiplier and perfect streak, and the best to beat. */
 	void DrawRunModule(const ASpinGameMode& GM, float X, float Y);
 

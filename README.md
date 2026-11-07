@@ -47,6 +47,7 @@ Early prototype.
 - [x] Pause menu (resume, restart, main menu)
 - [x] High posts (from level 12): purple posts that float above the dial - pass under them, don't lift
 - [x] Music support: menu and run tracks with crossfades and a game-over sting, a random run track each run, and a saved volume setting (no tracks added yet)
+- [x] A dial that glitches out to a bigger size as the camera pulls back, and neon obstacles that glitch in and out
 - [x] Unlockable bonuses earned through play, equipped into slots that open at levels 25 and 40; runs that use them are marked on the leaderboard
 - [x] A procedural neon city that lights up from the dial outward as the run goes on
 - [ ] Online leaderboard
