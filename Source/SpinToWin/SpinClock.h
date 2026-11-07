@@ -218,6 +218,29 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Growth", meta = (ClampMin = "0"))
 	float DialGlitchJitter = 30.f;
 
+	// ---------------- Game over collapse ----------------
+
+	/** Seconds the dial takes to break down when the run ends: it glitches, spins off its track and
+	 *  collapses to nothing. It glitches back in when the game-over screen is left. */
+	UPROPERTY(EditAnywhere, Category = "Clock|GameOver", meta = (ClampMin = "0.1"))
+	float CollapseTime = 1.6f;
+
+	/** How fast the dial is whirling (degrees a second) by the time it vanishes. It speeds up from nothing. */
+	UPROPERTY(EditAnywhere, Category = "Clock|GameOver", meta = (ClampMin = "0"))
+	float CollapseSpinSpeed = 1080.f;
+
+	/** How far (degrees) the dial tips over as it wobbles like a dropped coin. */
+	UPROPERTY(EditAnywhere, Category = "Clock|GameOver", meta = (ClampMin = "0", ClampMax = "80"))
+	float CollapseTilt = 28.f;
+
+	/** How far it skids off its spot before vanishing, as a fraction of the dial radius. */
+	UPROPERTY(EditAnywhere, Category = "Clock|GameOver", meta = (ClampMin = "0"))
+	float CollapseDrift = 0.35f;
+
+	/** Fraction of CollapseTime (0..1) at which it starts shrinking; before that it only glitches and spins. */
+	UPROPERTY(EditAnywhere, Category = "Clock|GameOver", meta = (ClampMin = "0", ClampMax = "0.95"))
+	float CollapseShrinkStart = 0.45f;
+
 	/** Hand length as a fraction of the dial radius. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Layout")
 	float HandLengthFraction = 0.9f;
@@ -506,6 +529,70 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera", meta = (ClampMin = "0"))
 	float CameraSwaySpeed = 1.f;
 
+	// The menu shot: on the menus (and game over) the camera drops down almost to the ground, so the
+	// dial runs along the bottom of the screen with the skyline above it. It swoops up into the
+	// play camera when a run starts, and back down when the run ends.
+
+	/** Menu shot: how far back from the dial centre the camera sits, as a multiple of the dial radius. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu", meta = (ClampMin = "0"))
+	float MenuCameraDistanceFactor = 2.4f;
+
+	/** Menu shot: camera height above the dial, as a multiple of the dial radius. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu", meta = (ClampMin = "0"))
+	float MenuCameraHeightFactor = 0.4f;
+
+	/** Menu shot: degrees the camera looks up (negative = down). Slightly up keeps the dial low in
+	 *  the frame and the skyline in view. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu")
+	float MenuCameraPitch = 3.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu")
+	float MenuCameraFOV = 75.f;
+
+	/** Menu shot: the camera slowly swings around the dial by up to this many degrees either way. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu", meta = (ClampMin = "0"))
+	float MenuCameraSwing = 18.f;
+
+	/** Seconds for one full swing back and forth. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu", meta = (ClampMin = "1"))
+	float MenuCameraSwingPeriod = 70.f;
+
+	/** Seconds (roughly) the camera takes to swoop between the menu shot and the play camera. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu", meta = (ClampMin = "0.05"))
+	float MenuCameraTransitionTime = 0.6f;
+
+	// The jam border: the HUD's pulsing glow around the screen edges while the hand overheats
+	// (orange) and while it's jammed (red), with sparks spraying in from the edges.
+
+	/** How far the glow reaches in from each edge, in pixels at 1080p. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderDepth = 50.f;
+
+	/** Thickness of the solid line along the very edge, in pixels at 1080p. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderLineThickness = 3.f;
+
+	/** The glow's brightness pulses between these two (0..1-ish; higher is brighter). */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderMinBrightness = 0.15f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderMaxBrightness = 0.45f;
+
+	/** How fast it pulses while overheating, and while jammed (higher = faster). */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderWarningPulseSpeed = 14.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderJammedPulseSpeed = 20.f;
+
+	/** Sparks per second thrown in from the edges while overheating, and while jammed. 0 = none. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderWarningSparks = 8.f;
+
+	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
+	float JamBorderJammedSparks = 30.f;
+
 	/** Biggest camera offset (world units) at full shake intensity. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float MaxShakeOffset = 91.f;
@@ -534,6 +621,8 @@ private:
 	void UpdateColors(const ASpinGameMode& GM);
 	void UpdateMusic(const ASpinGameMode& GM);
 	void UpdateDialGrowth(float DeltaSeconds);
+	/** The game-over breakdown (see CollapseTime). Returns true while it owns the dial's transform. */
+	bool UpdateCollapse(float DeltaSeconds, float TargetScale);
 	void UpdateObstacles(float DeltaSeconds);
 	void UpdateObstaclePassing(ASpinGameMode& GM, float Moved);
 
@@ -543,6 +632,10 @@ private:
 	/** Where the camera rests (before shake): 0 = the close-up from CameraPitch / CameraDistanceFactor,
 	 *  1 = the wide shot from the Revealed values. */
 	void SetCameraBase(float Blend);
+
+	/** Blends the camera base toward the low menu shot while a menu is up, and back out of it when
+	 *  a run starts. Runs after SetCameraBase, before UpdateCameraMotion. */
+	void ApplyMenuShot(float DeltaSeconds);
 	void UpdateSparks(float DeltaSeconds);
 
 	static constexpr int32 NumZoneSegments = 48;
@@ -791,6 +884,11 @@ private:
 	float CameraBlendRate = 0.f;
 	float SwayTime = 0.f;
 
+	/** 1 = the menu shot, 0 = the play camera, smoothed (see ApplyMenuShot). Below 0 = not started. */
+	float MenuBlend = -1.f;
+	float MenuBlendRate = 0.f;
+	float MenuSwingTime = 0.f;
+
 	/** The dial's current size, and the animation towards DialGrowTo (below 0 = not started). */
 	float DialScale = 1.f;
 	float DialGrowFrom = 1.f;
@@ -802,6 +900,15 @@ private:
 	float DialGlitch = 0.f;
 	FLinearColor DialGlitchTint = FLinearColor::White;
 	int32 DialGlitchSeed = 0;
+
+	/** The game-over collapse: running (or finished and hidden) while the run is over. */
+	bool bCollapsing = false;
+	float CollapseElapsed = 0.f;
+	float CollapseYaw = 0.f;
+	float CollapseSpinSign = 1.f;
+	/** The dial's size when the run ended, and the direction it skids off in. */
+	float CollapseFromScale = 1.f;
+	FVector CollapseDriftDir = FVector::ForwardVector;
 
 	/** The track from RunMusic played last, so the next one can be a different one. */
 	UPROPERTY()

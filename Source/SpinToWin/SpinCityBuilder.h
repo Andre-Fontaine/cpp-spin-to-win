@@ -233,6 +233,56 @@ public:
 	UPROPERTY(EditAnywhere, Category = "City|Life", meta = (ClampMin = "0.01"))
 	float JamGlitchFadeTime = 0.25f;
 
+	// ---------------- Ripples ----------------
+
+	/** Neon ripple rings spreading across the lake and river, like rain on a lit-up surface. They
+	 *  come more often as the hand speeds up, and every hit sends a shockwave out from the dial. They
+	 *  use the neon material, so they only show on water the city's light has reached. */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples")
+	bool bRipples = true;
+
+	/** Ripples started per second at the starting speed, and at max speed. */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
+	float RippleRateMin = 3.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
+	float RippleRateMax = 8.f;
+
+	/** Seconds a ripple takes to spread out and fade away. */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0.2"))
+	float RippleLifetime = 2.6f;
+
+	/** How far a ripple spreads before it's gone (world units), before scaling up with distance so
+	 *  far-off ones still read from the camera. */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "10"))
+	float RippleSize = 420.f;
+
+	/** Brightness of a ripple as it starts (it fades from there). */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
+	float RippleIntensity = 3.5f;
+
+	/** Ring thickness, as a multiple of the city's neon line width at that spot. */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0.1"))
+	float RippleWidthScale = 1.6f;
+
+	/** Ripples start no nearer the dial than this, and no farther out than this (or the light's edge). */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
+	float RippleMinDistance = 1100.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
+	float RippleMaxDistance = 16000.f;
+
+	/** The shockwave each hit sends across the water: how far it spreads (as a multiple of the dial's
+	 *  radius), how long it takes, and how bright it starts. Gold for a PERFECT, cyan for GOOD, purple for OK. */
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "1"))
+	float HitRippleReach = 5.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0.2"))
+	float HitRippleTime = 1.6f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
+	float HitRippleIntensity = 7.f;
+
 	// ---------------- Wind ----------------
 
 	/** Glowing specks and tumbling flakes carried through the air around the dial (0 = none). */
@@ -477,6 +527,17 @@ private:
 	void UpdateWindows(float DeltaSeconds, float Flare);
 	void UpdateSignFlicker(float DeltaSeconds, float Flare);
 	void UpdateMotes(float DeltaSeconds, float Time);
+
+	/** The water ripples (see bRipples). */
+	static constexpr int32 MaxRipples = 40;
+	static constexpr int32 NumRippleSegments = 64;
+	void InitRipples();
+	void UpdateRipples(float DeltaSeconds, float Flare);
+	/** Starts a ripple in a free slot (or the oldest one). Delay holds it back that many seconds. */
+	void StartRipple(const FVector2D& Center, float StartRadius, float EndRadius, float Duration, float Width,
+		const FLinearColor& Color, float Intensity, float Delay = 0.f);
+	/** True if this spot is open water (the lake or the river). */
+	bool IsOnWater(const FVector2D& Pos) const;
 	void UpdateFlyingCars(float DeltaSeconds);
 
 	/** The jam glitch: eases in or out with the jam, and while in, gives every light group a new
@@ -678,6 +739,32 @@ private:
 	};
 	TArray<FMote> MoteState;
 	TArray<FTransform> MoteTransforms;
+
+	/** One ISM of ring segments per ripple slot, each with its own material so it can fade alone. */
+	UPROPERTY()
+	TArray<TObjectPtr<UInstancedStaticMeshComponent>> RippleRings;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> RippleMIDs;
+
+	struct FRipple
+	{
+		bool bActive = false;
+		/** Seconds since it started (negative while it's held back by a delay). */
+		float Age = 0.f;
+		float Duration = 1.f;
+		FVector2D Center = FVector2D::ZeroVector;
+		float StartRadius = 0.f;
+		float EndRadius = 100.f;
+		float Width = 10.f;
+		float Intensity = 1.f;
+		float Seed = 0.f;
+	};
+	TArray<FRipple> RippleState;
+	TArray<FTransform> RippleTransforms;
+	float RippleOwed = 0.f;
+	float LastRippleHitTime = -1000.f;
+	TWeakObjectPtr<class ASpinCityFX> CityFX;
 
 	struct FFlyingCar
 	{

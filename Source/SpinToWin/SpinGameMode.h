@@ -16,10 +16,8 @@ enum class ESpinState : uint8
 	WaitingToStart,
 	/** PLAY was chosen: pick TUTORIAL, ENDLESS or DAILY. */
 	ModeSelect,
-	/** ENDLESS was chosen: toggle run modifiers, then start. */
+	/** ENDLESS was chosen: the run setup screen - switch modifiers and bonuses on or off, then start. */
 	ModifierSelect,
-	/** BONUSES was chosen on the modifier screen: equip unlocked bonuses into slots. */
-	BonusSelect,
 	/** SETTINGS was chosen: graphics quality, resolution, and volume. */
 	SettingsMenu,
 	/** LEADERBOARD was chosen: the saved best runs, by level and by score. */
@@ -89,8 +87,6 @@ enum class EMenuAction : uint8
 	OpenModifiers,
 	/** Index = which ESpinModifier to switch on or off. */
 	ToggleModifier,
-	/** From the modifier screen: opens the bonus screen. */
-	OpenBonuses,
 	/** Index = which ESpinBonus to equip or unequip. */
 	ToggleBonus,
 	StartDaily,
@@ -172,8 +168,8 @@ enum class ESpinBonus : uint8
 	Count UMETA(Hidden)
 };
 
-/** What a bonus's unlock is measured by, on the player's profile. */
-enum class ESpinBonusStat : uint8
+/** What a modifier or bonus unlock is measured by, on the player's profile. */
+enum class ESpinUnlockStat : uint8
 {
 	BestLevel,
 	ObstaclesCleared,
@@ -188,7 +184,7 @@ struct FSpinBonusInfo
 	const TCHAR* Description;
 	/** "Reach level 10", shown while it's locked. */
 	const TCHAR* Requirement;
-	ESpinBonusStat Stat;
+	ESpinUnlockStat Stat;
 	int32 Target;
 };
 
@@ -199,6 +195,10 @@ struct FSpinModifierInfo
 	const TCHAR* Description;
 	/** Points multiplier while it's on. Several multiply together. */
 	float PointsMultiplier;
+	/** "Reach level 5", shown while it's locked (modifiers unlock like bonuses). */
+	const TCHAR* Requirement;
+	ESpinUnlockStat Stat;
+	int32 Target;
 };
 
 UENUM(BlueprintType)
@@ -415,7 +415,7 @@ public:
 
 	/** Endless: chance (0..1) that a successful hit is followed by a jam. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Jam", meta = (ClampMin = "0", ClampMax = "1"))
-	float JamChance = 0.12f;
+	float JamChance = 0.1f;
 
 	// ---------------- Levels (Endless) ----------------
 
@@ -470,10 +470,10 @@ public:
 
 	/** Best levels that open a second and a third bonus slot. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Bonuses", meta = (ClampMin = "1"))
-	int32 SecondSlotLevel = 25;
+	int32 SecondSlotLevel = 15;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Bonuses", meta = (ClampMin = "1"))
-	int32 ThirdSlotLevel = 40;
+	int32 ThirdSlotLevel = 25;
 
 	/** How many runs each leaderboard keeps. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Scoring", meta = (ClampMin = "1"))
@@ -577,11 +577,11 @@ public:
 
 	/** Hand speed will never exceed this. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float MaxSpeed = 400.f;
+	float MaxSpeed = 330.f;
 
 	/** Speed is multiplied by this after every successful hit. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float SpeedMultiplier = 1.012f;
+	float SpeedMultiplier = 1.007f;
 
 	/** Half-width of the target zone at the start, in degrees. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -589,11 +589,11 @@ public:
 
 	/** The target zone never gets narrower than this (half-width, degrees). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float MinZoneHalfWidth = 12.f;
+	float MinZoneHalfWidth = 14.f;
 
 	/** How much the zone half-width shrinks after each hit. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float ZoneShrinkPerHit = 0.18f;
+	float ZoneShrinkPerHit = 0.1f;
 
 	/** Next zone appears at least this many degrees ahead of the hand. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -603,10 +603,19 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float MaxZoneOffset = 200.f;
 
-	/** Seconds after game over before the game-over menu accepts input (avoids an accidental retry
-	 *  from a press that was meant for the hand). */
+	/** Seconds after the game-over screen starts fading in before it accepts input (avoids an
+	 *  accidental retry from a press that was meant for the hand). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float RestartDelay = 1.f;
+
+	/** Seconds after the run ends before the game-over screen appears, so the dial's collapse
+	 *  (ASpinClock::CollapseTime) plays out in the clear. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
+	float GameOverScreenDelay = 3.f;
+
+	/** Seconds the game-over screen takes to fade in once it appears. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning", meta = (ClampMin = "0"))
+	float GameOverFadeTime = 2.f;
 
 	/** Seconds of invincibility (with a countdown) after losing a miss life - obstacles, zone
 	 *  misses, jams, and button presses are all ignored until this runs out. Obstacle hits don't
@@ -713,12 +722,6 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float RunPointsMultiplier = 1.f;
-
-	/** The highlighted item on the modifier or bonus screen, for controller navigation: the rows
-	 *  first (0..N-1, one per modifier or bonus), then the buttons along the bottom, left to right
-	 *  (N = START). The first button activates it. */
-	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
-	int32 MenuFocus = 0;
 
 	/** Bonuses in effect this run (bit mask of 1 << ESpinBonus). */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -950,6 +953,17 @@ public:
 	/** True if this modifier is in effect for the current run. */
 	bool HasModifier(ESpinModifier Modifier) const;
 
+	/** The active player's progress towards unlocking a modifier (Current can pass Target). */
+	void GetModifierProgress(ESpinModifier Modifier, int32& OutCurrent, int32& OutTarget) const;
+
+	bool IsModifierUnlocked(ESpinModifier Modifier) const;
+
+	/** The modifiers unlocked by the active player (bit mask). */
+	int32 GetUnlockedModifiers() const;
+
+	/** The active player's lifetime value of an unlock stat (best level, jams fixed, ...). */
+	int32 GetUnlockStat(ESpinUnlockStat Stat) const;
+
 	/** Today's date as YYYYMMDD (local time): the daily challenge's id and seed. */
 	static int32 GetTodayKey();
 
@@ -1018,14 +1032,23 @@ public:
 	/** True once the game-over menu has been up long enough (RestartDelay) to accept input. */
 	bool IsGameOverMenuReady() const;
 
+	/** How far the game-over screen has faded in: 0 through GameOverScreenDelay, rising to 1 over
+	 *  GameOverFadeTime. 1 outside game over. */
+	float GetGameOverScreenAlpha() const;
+
 	/** The pause button: opens the pause menu during a run, or closes it again. Ignored anywhere else. */
 	void TogglePauseMenu();
 
 	/** Start / P: starts the run from the modifier and bonus screens, pauses during one. */
 	void HandleStartButton();
 
-	/** D-pad / stick / arrow keys on the modifier and bonus screens: moves MenuFocus (DY -1 = up). */
-	void HandleMenuNav(int32 DX, int32 DY);
+	/** True on the screens that are driven like a menu - a highlight to move, select and back - rather
+	 *  than by the hit buttons: every menu, game over, and the pause menu. The briefing screens
+	 *  aren't: they wait for one particular button. */
+	bool IsMenuScreen() const;
+
+	/** Back (B / Circle / Esc) on a menu screen: up one level, cancel, or resume from the pause menu. */
+	void HandleMenuBack();
 
 	/** True while a run is paused behind the pause menu. The whole world is paused (see
 	 *  UGameplayStatics::SetGamePaused), so the hand, timers and effects all freeze. */
@@ -1053,13 +1076,6 @@ private:
 	 *  without stopping or resetting the hand. */
 	void ContinueFromTutorial();
 	void OpenModifiers();
-	void OpenBonuses();
-
-	/** Controller navigation (see MenuFocus): how many rows and bottom buttons the current screen has,
-	 *  and pressing the highlighted one. */
-	int32 GetFocusRowCount() const;
-	int32 GetFocusButtonCount() const;
-	void ActivateMenuFocus();
 
 	/** Run tuning with this run's modifiers applied. */
 	float GetRunStartSpeed() const;

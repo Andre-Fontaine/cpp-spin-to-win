@@ -13,13 +13,25 @@ ASpinPlayerController::ASpinPlayerController()
 	bShowMouseCursor = false;
 }
 
+ASpinGameMode* ASpinPlayerController::GetSpinGameMode() const
+{
+	return GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+}
+
+ASpinHUD* ASpinPlayerController::GetSpinHUD() const
+{
+	return Cast<ASpinHUD>(GetHUD());
+}
+
 void ASpinPlayerController::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// Only touch the flag when it actually needs to change - setting it every frame regardless
-	// would fight the engine's own cursor handling.
-	const bool bWantCursor = IsInMenuState();
+	// The cursor is for mouse users: shown on the menus, hidden once a gamepad is in use (it comes
+	// back as soon as the mouse moves). Only touch the flag when it actually needs to change -
+	// setting it every frame regardless would fight the engine's own cursor handling.
+	const ASpinGameMode* GM = GetSpinGameMode();
+	const bool bWantCursor = IsInMenuState() && GM && GM->InputStyle == ESpinInputStyle::Keyboard;
 	if (bShowMouseCursor != bWantCursor)
 	{
 		bShowMouseCursor = bWantCursor;
@@ -28,32 +40,8 @@ void ASpinPlayerController::Tick(float DeltaSeconds)
 
 bool ASpinPlayerController::IsInMenuState() const
 {
-	const ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
-	if (!GM)
-	{
-		return false;
-	}
-
-	if (GM->IsPauseMenuOpen())
-	{
-		return true;
-	}
-
-	switch (GM->State)
-	{
-	case ESpinState::WaitingToStart:
-	case ESpinState::ModeSelect:
-	case ESpinState::ModifierSelect:
-	case ESpinState::BonusSelect:
-	case ESpinState::SettingsMenu:
-	case ESpinState::Leaderboard:
-	case ESpinState::ProfileSelect:
-	case ESpinState::NameEntry:
-	case ESpinState::GameOver:
-		return true;
-	default:
-		return false;
-	}
+	const ASpinGameMode* GM = GetSpinGameMode();
+	return GM && GM->IsMenuScreen();
 }
 
 bool ASpinPlayerController::TryHandleMenuClick()
@@ -63,8 +51,8 @@ bool ASpinPlayerController::TryHandleMenuClick()
 		return false;
 	}
 
-	ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
-	const ASpinHUD* SpinHUD = Cast<ASpinHUD>(GetHUD());
+	ASpinGameMode* GM = GetSpinGameMode();
+	ASpinHUD* SpinHUD = GetSpinHUD();
 	if (!GM || !SpinHUD)
 	{
 		return true; // still a menu state, so consume the click either way
@@ -73,12 +61,22 @@ bool ASpinPlayerController::TryHandleMenuClick()
 	float MouseX = 0.f, MouseY = 0.f;
 	if (GetMousePosition(MouseX, MouseY))
 	{
-		for (const FSpinMenuRegion& Region : SpinHUD->GetMenuRegions())
+		const FVector2D Mouse(MouseX, MouseY);
+		if (const FSpinMenuRegion* Hit = SpinHUD->FindRegionAt(Mouse, false))
 		{
-			if (Region.Action != EMenuAction::None && Region.Rect.IsInside(FVector2D(MouseX, MouseY)))
+			if (Hit->Action != EMenuAction::None)
 			{
+				// Copy it: the region list belongs to the HUD and is rebuilt every frame.
+				const FSpinMenuRegion Region = *Hit;
+
+				// Clicking moves the highlight there too (for a click-only part like a settings
+				// arrow, onto the row it belongs to).
+				if (const FSpinMenuRegion* Focusable = SpinHUD->FindRegionAt(Mouse, true))
+				{
+					SpinHUD->SetFocus(Focusable->GetKey());
+				}
+				SpinHUD->NotifyActivated(Region.GetKey(), Region.Rect);
 				GM->HandleMenuAction(Region.Action, Region.Index);
-				break;
 			}
 		}
 	}
@@ -86,12 +84,27 @@ bool ASpinPlayerController::TryHandleMenuClick()
 	return true;
 }
 
+void ASpinPlayerController::ConfirmFocusedItem()
+{
+	ASpinGameMode* GM = GetSpinGameMode();
+	ASpinHUD* SpinHUD = GetSpinHUD();
+	const FSpinMenuRegion* Focused = SpinHUD ? SpinHUD->GetFocusedRegion() : nullptr;
+	if (!GM || !Focused || Focused->Action == EMenuAction::None)
+	{
+		return;
+	}
+
+	const FSpinMenuRegion Region = *Focused;
+	SpinHUD->NotifyActivated(Region.GetKey(), Region.Rect);
+	GM->HandleMenuAction(Region.Action, Region.Index);
+}
+
 bool ASpinPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
 	// While a name is being typed, the keyboard is a keyboard: every key goes to the name instead of
 	// the bindings below (otherwise typing W or D would also count as a button press). The mouse
-	// still reaches the OK / CANCEL buttons.
-	ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+	// still reaches the OK / CANCEL buttons, and a gamepad can still move between them.
+	ASpinGameMode* GM = GetSpinGameMode();
 
 	// The on-screen button names follow whichever device was used last. Analog input only counts
 	// once it's deliberate, so a drifting stick or a nudged mouse doesn't flip the prompts.
@@ -175,14 +188,15 @@ void ASpinPlayerController::SetupInputComponent()
 		return;
 	}
 
-	// The hit buttons and the left click also drive the pause menu, so they have to keep working
-	// while the game is paused. Everything else is ignored until it's resumed.
+	// The menu inputs (hit buttons as select / back, navigation, the left click) also drive the
+	// pause menu, so they have to keep working while the game is paused. Everything else is
+	// ignored until it's resumed.
 
-	// Hit button 0
+	// Hit button 0 (select on menus)
 	InputComponent->BindKey(EKeys::W, IE_Pressed, this, &ASpinPlayerController::OnButton0).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Bottom, IE_Pressed, this, &ASpinPlayerController::OnButton0).bExecuteWhenPaused = true;
 
-	// Hit button 1
+	// Hit button 1 (back on menus)
 	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &ASpinPlayerController::OnButton1).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::Gamepad_FaceButton_Right, IE_Pressed, this, &ASpinPlayerController::OnButton1).bExecuteWhenPaused = true;
 
@@ -194,24 +208,27 @@ void ASpinPlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ASpinPlayerController::OnPause).bExecuteWhenPaused = true;
 	InputComponent->BindKey(EKeys::Gamepad_Special_Right, IE_Pressed, this, &ASpinPlayerController::OnPause).bExecuteWhenPaused = true;
 
-	// Menu navigation on the modifier and bonus screens (ignored everywhere else). Holding a key repeats.
+	// Menu navigation (ignored outside the menus). Holding a direction repeats.
 	for (const EInputEvent Event : { IE_Pressed, IE_Repeat })
 	{
-		InputComponent->BindKey(EKeys::Up, Event, this, &ASpinPlayerController::OnNavUp);
-		InputComponent->BindKey(EKeys::Down, Event, this, &ASpinPlayerController::OnNavDown);
-		InputComponent->BindKey(EKeys::Left, Event, this, &ASpinPlayerController::OnNavLeft);
-		InputComponent->BindKey(EKeys::Right, Event, this, &ASpinPlayerController::OnNavRight);
-		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, Event, this, &ASpinPlayerController::OnNavUp);
-		InputComponent->BindKey(EKeys::Gamepad_DPad_Down, Event, this, &ASpinPlayerController::OnNavDown);
-		InputComponent->BindKey(EKeys::Gamepad_DPad_Left, Event, this, &ASpinPlayerController::OnNavLeft);
-		InputComponent->BindKey(EKeys::Gamepad_DPad_Right, Event, this, &ASpinPlayerController::OnNavRight);
-		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Up, Event, this, &ASpinPlayerController::OnNavUp);
-		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Down, Event, this, &ASpinPlayerController::OnNavDown);
-		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Left, Event, this, &ASpinPlayerController::OnNavLeft);
-		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Right, Event, this, &ASpinPlayerController::OnNavRight);
+		InputComponent->BindKey(EKeys::Up, Event, this, &ASpinPlayerController::OnNavUp).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Down, Event, this, &ASpinPlayerController::OnNavDown).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Left, Event, this, &ASpinPlayerController::OnNavLeft).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Right, Event, this, &ASpinPlayerController::OnNavRight).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Up, Event, this, &ASpinPlayerController::OnNavUp).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Down, Event, this, &ASpinPlayerController::OnNavDown).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Left, Event, this, &ASpinPlayerController::OnNavLeft).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_DPad_Right, Event, this, &ASpinPlayerController::OnNavRight).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Up, Event, this, &ASpinPlayerController::OnNavUp).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Down, Event, this, &ASpinPlayerController::OnNavDown).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Left, Event, this, &ASpinPlayerController::OnNavLeft).bExecuteWhenPaused = true;
+		InputComponent->BindKey(EKeys::Gamepad_LeftStick_Right, Event, this, &ASpinPlayerController::OnNavRight).bExecuteWhenPaused = true;
 	}
-	// Enter presses the highlighted item there too (W / A / Cross already do, as the first button).
-	InputComponent->BindKey(EKeys::Enter, IE_Pressed, this, &ASpinPlayerController::OnMenuConfirm);
+
+	// Enter selects, Esc / Backspace go back (W and D, as the first and second buttons, do too).
+	InputComponent->BindKey(EKeys::Enter, IE_Pressed, this, &ASpinPlayerController::OnMenuConfirm).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::Escape, IE_Pressed, this, &ASpinPlayerController::OnMenuBack).bExecuteWhenPaused = true;
+	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ASpinPlayerController::OnMenuBack).bExecuteWhenPaused = true;
 
 	// Lift: hold to keep the hand raised.
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ASpinPlayerController::OnLiftPressed).bExecuteWhenPaused = true;
@@ -226,16 +243,32 @@ void ASpinPlayerController::SetupInputComponent()
 
 void ASpinPlayerController::OnButton0()
 {
+	// On menus the first button (A / Cross / W) selects; everywhere else it's a hit.
+	if (IsInMenuState())
+	{
+		ConfirmFocusedItem();
+		return;
+	}
 	PressButton(0);
 }
 
 void ASpinPlayerController::OnButton1()
 {
+	// On menus the second button (B / Circle / D) goes back.
+	if (IsInMenuState())
+	{
+		OnMenuBack();
+		return;
+	}
 	PressButton(1);
 }
 
 void ASpinPlayerController::OnButton2()
 {
+	if (IsInMenuState())
+	{
+		return;
+	}
 	PressButton(2);
 }
 
@@ -255,7 +288,7 @@ void ASpinPlayerController::OnLiftReleased()
 
 void ASpinPlayerController::OnRepair()
 {
-	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	if (ASpinGameMode* GM = GetSpinGameMode())
 	{
 		GM->HandleRepairPressed();
 	}
@@ -263,7 +296,7 @@ void ASpinPlayerController::OnRepair()
 
 void ASpinPlayerController::OnPause()
 {
-	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	if (ASpinGameMode* GM = GetSpinGameMode())
 	{
 		GM->HandleStartButton();
 	}
@@ -276,25 +309,52 @@ void ASpinPlayerController::OnNavRight() { Navigate(1, 0); }
 
 void ASpinPlayerController::Navigate(int32 DX, int32 DY)
 {
-	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	ASpinGameMode* GM = GetSpinGameMode();
+	ASpinHUD* SpinHUD = GetSpinHUD();
+	if (!GM || !SpinHUD || !IsInMenuState())
 	{
-		GM->HandleMenuNav(DX, DY);
+		return;
 	}
+
+	// Left / right on an item with a value (a settings row) change the value; otherwise every
+	// direction moves the highlight.
+	if (DX != 0)
+	{
+		if (const FSpinMenuRegion* Focused = SpinHUD->GetFocusedRegion())
+		{
+			const EMenuAction Action = DX < 0 ? Focused->LeftAction : Focused->RightAction;
+			if (Action != EMenuAction::None)
+			{
+				SpinHUD->NotifyActivated({ Action, INDEX_NONE }, Focused->Rect);
+				GM->HandleMenuAction(Action);
+				return;
+			}
+		}
+	}
+	SpinHUD->MoveFocus(DX, DY);
 }
 
 void ASpinPlayerController::OnMenuConfirm()
 {
-	// Only on the screens with a highlight - elsewhere Enter would land as a hit.
-	ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
-	if (GM && (GM->State == ESpinState::ModifierSelect || GM->State == ESpinState::BonusSelect))
+	// Only on menus - elsewhere Enter does nothing.
+	if (IsInMenuState())
 	{
-		GM->HandleButtonPressed(0);
+		ConfirmFocusedItem();
+	}
+}
+
+void ASpinPlayerController::OnMenuBack()
+{
+	ASpinGameMode* GM = GetSpinGameMode();
+	if (GM && IsInMenuState())
+	{
+		GM->HandleMenuBack();
 	}
 }
 
 void ASpinPlayerController::PressButton(int32 ButtonIndex)
 {
-	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	if (ASpinGameMode* GM = GetSpinGameMode())
 	{
 		GM->HandleButtonPressed(ButtonIndex);
 	}
@@ -302,7 +362,7 @@ void ASpinPlayerController::PressButton(int32 ButtonIndex)
 
 void ASpinPlayerController::SetLift(bool bHeld)
 {
-	if (ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr)
+	if (ASpinGameMode* GM = GetSpinGameMode())
 	{
 		GM->SetLiftHeld(bHeld);
 	}

@@ -243,7 +243,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	// Clamp so a frame hitch can't make the hand skip over the zone.
 	const float Dt = FMath::Min(DeltaSeconds, 0.05f);
 
-	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::ModifierSelect || State == ESpinState::BonusSelect || State == ESpinState::SettingsMenu
+	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::ModifierSelect || State == ESpinState::SettingsMenu
 		|| State == ESpinState::Leaderboard || State == ESpinState::ProfileSelect || State == ESpinState::NameEntry)
 	{
 		// Slow idle spin behind the menus.
@@ -374,97 +374,15 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 
 void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 {
-	// Pause menu: the first button resumes, and so does the second - it's "back" on a gamepad (B / O),
-	// so pressing it out of habit mustn't throw the run away. The third goes to the main menu.
-	// Restarting is mouse-only, so it can't happen by accident.
-	if (IsPauseMenuOpen())
+	// The menus (and the pause menu) never get here: on them the player controller turns the first
+	// and second buttons into select / back for the highlighted item (see ASpinPlayerController).
+	if (IsMenuScreen())
 	{
-		static const EMenuAction PauseActions[] = { EMenuAction::ResumeGame, EMenuAction::ResumeGame, EMenuAction::QuitRunToMenu };
-		if (ButtonIndex >= 0 && ButtonIndex < UE_ARRAY_COUNT(PauseActions))
-		{
-			HandleMenuAction(PauseActions[ButtonIndex]);
-		}
 		return;
 	}
 
 	switch (State)
 	{
-	case ESpinState::WaitingToStart:
-		// First button: Play (mode select). Second button: Settings. Mirrors the PLAY / SETTINGS
-		// menu cards so keyboard and gamepad reach the same places mouse clicks do.
-		if (ButtonIndex == 0)
-		{
-			OpenModeSelect();
-		}
-		else if (ButtonIndex == 1)
-		{
-			OpenSettings();
-		}
-		break;
-
-	case ESpinState::ModeSelect:
-		// Mirrors the three cards: tutorial, Endless (via the modifier screen), daily challenge.
-		if (ButtonIndex == 0)
-		{
-			StartTutorial();
-		}
-		else if (ButtonIndex == 1)
-		{
-			OpenModifiers();
-		}
-		else if (ButtonIndex == 2)
-		{
-			StartGame(true);
-		}
-		break;
-
-	case ESpinState::ModifierSelect:
-		// First button: whatever is highlighted (START until the player moves - see HandleMenuNav).
-		// Second button: back to mode select. Third: bonuses.
-		if (ButtonIndex == 0)
-		{
-			ActivateMenuFocus();
-		}
-		else if (ButtonIndex == 1)
-		{
-			OpenModeSelect();
-		}
-		else if (ButtonIndex == 2)
-		{
-			OpenBonuses();
-		}
-		break;
-
-	case ESpinState::BonusSelect:
-		// First button: whatever is highlighted. Second button: back to the modifier screen.
-		if (ButtonIndex == 0)
-		{
-			ActivateMenuFocus();
-		}
-		else if (ButtonIndex == 1)
-		{
-			OpenModifiers();
-			MenuFocus = GetFocusRowCount() + 1; // back on BONUSES
-		}
-		break;
-
-	case ESpinState::SettingsMenu:
-		// No keyboard shortcuts here - mouse only for now.
-		break;
-
-	case ESpinState::Leaderboard:
-	case ESpinState::ProfileSelect:
-		// The second button backs out (the BACK button does the same). Picking a profile is mouse-only.
-		if (ButtonIndex == 1)
-		{
-			CloseMenus();
-		}
-		break;
-
-	case ESpinState::NameEntry:
-		// Typing goes through TypeNameChar instead - the player controller intercepts the keyboard.
-		break;
-
 	case ESpinState::Playing:
 		// Invincibility window after losing a life: nothing can be hit and
 		// nothing can go wrong, so presses are completely ignored until the timer runs out.
@@ -545,20 +463,7 @@ void ASpinGameMode::HandleButtonPressed(int32 ButtonIndex)
 		break;
 	}
 
-	case ESpinState::GameOver:
-		// Mirrors the game-over menu: first button retries (the same kind of run), second goes back
-		// to the main menu. Quitting is mouse-only so it can't happen by accident.
-		if (IsGameOverMenuReady())
-		{
-			if (ButtonIndex == 0)
-			{
-				StartGame(bDailyRun);
-			}
-			else if (ButtonIndex == 1)
-			{
-				ReturnToTitle();
-			}
-		}
+	default:
 		break;
 	}
 }
@@ -784,7 +689,21 @@ float ASpinGameMode::GetHitPulse() const
 
 bool ASpinGameMode::IsGameOverMenuReady() const
 {
-	return State == ESpinState::GameOver && GetWorld() && GetWorld()->GetTimeSeconds() - GameOverTime >= RestartDelay;
+	return State == ESpinState::GameOver && GetWorld() && GetWorld()->GetTimeSeconds() - GameOverTime >= GameOverScreenDelay + RestartDelay;
+}
+
+float ASpinGameMode::GetGameOverScreenAlpha() const
+{
+	if (State != ESpinState::GameOver || !GetWorld())
+	{
+		return 1.f;
+	}
+	const float SinceShown = GetWorld()->GetTimeSeconds() - GameOverTime - GameOverScreenDelay;
+	if (SinceShown <= 0.f)
+	{
+		return 0.f;
+	}
+	return GameOverFadeTime > 0.f ? FMath::SmoothStep(0.f, 1.f, SinceShown / GameOverFadeTime) : 1.f;
 }
 
 void ASpinGameMode::RegisterHit()
@@ -889,6 +808,7 @@ void ASpinGameMode::RecordRun()
 
 	// What was unlocked before this run, to tell what it unlocked.
 	const int32 OldUnlocked = GetUnlockedBonuses();
+	const int32 OldModifiers = GetUnlockedModifiers();
 	const int32 OldSlots = GetBonusSlots();
 
 	// Daily runs only compete with that day's daily runs. One that ran past midnight is
@@ -919,6 +839,14 @@ void ASpinGameMode::RecordRun()
 		}
 	}
 
+	const int32 GainedModifiers = GetUnlockedModifiers() & ~OldModifiers;
+	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
+	{
+		if (GainedModifiers & (1 << i))
+		{
+			NewUnlocks.Add(GetModifierInfo(static_cast<ESpinModifier>(i)).Name);
+		}
+	}
 	const int32 Gained = GetUnlockedBonuses() & ~OldUnlocked;
 	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
 	{
@@ -941,14 +869,15 @@ void ASpinGameMode::RecordRun()
 
 const FSpinModifierInfo& ASpinGameMode::GetModifierInfo(ESpinModifier Modifier)
 {
-	// The multipliers roughly track how much harder each one makes a run.
+	// The multipliers roughly track how much harder each one makes a run. Each one unlocks once the
+	// player has shown they can handle the plain game that far.
 	static const FSpinModifierInfo Infos[] =
 	{
-		{ TEXT("FAST HAND"),  TEXT("The hand starts 35% faster."),                           1.3f },
-		{ TEXT("TINY ZONES"), TEXT("Target zones are 30% narrower."),                       1.5f },
-		{ TEXT("WILD SPIN"),  TEXT("The hand only sometimes reverses after a hit."),         1.25f },
-		{ TEXT("EARLY JAMS"), TEXT("Jams from level 1, and half again as often."),           1.3f },
-		{ TEXT("ONE LIFE"),   TEXT("One life and one miss: any mistake ends the run."),      2.f },
+		{ TEXT("FAST HAND"),  TEXT("The hand starts 35% faster."),                      1.3f,  TEXT("Reach level 5"),  ESpinUnlockStat::BestLevel, 5 },
+		{ TEXT("TINY ZONES"), TEXT("Target zones are 30% narrower."),                  1.5f,  TEXT("Reach level 12"), ESpinUnlockStat::BestLevel, 12 },
+		{ TEXT("WILD SPIN"),  TEXT("The hand only sometimes reverses after a hit."),    1.25f, TEXT("Reach level 8"),  ESpinUnlockStat::BestLevel, 8 },
+		{ TEXT("EARLY JAMS"), TEXT("Jams from level 1, and half again as often."),      1.3f,  TEXT("Fix 15 jams"),    ESpinUnlockStat::JamsFixed, 15 },
+		{ TEXT("ONE LIFE"),   TEXT("One life and one miss: any mistake ends the run."), 2.f,   TEXT("Reach level 20"), ESpinUnlockStat::BestLevel, 20 },
 	};
 	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinModifier::Count), "One entry per modifier");
 	return Infos[FMath::Clamp(static_cast<int32>(Modifier), 0, static_cast<int32>(ESpinModifier::Count) - 1)];
@@ -983,6 +912,51 @@ FString ASpinGameMode::GetModifierNames(int32 Mask)
 bool ASpinGameMode::HasModifier(ESpinModifier Modifier) const
 {
 	return (RunModifiers & (1 << static_cast<int32>(Modifier))) != 0;
+}
+
+int32 ASpinGameMode::GetUnlockStat(ESpinUnlockStat Stat) const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	if (!Profile)
+	{
+		return 0;
+	}
+
+	switch (Stat)
+	{
+	case ESpinUnlockStat::BestLevel:        return Profile->BestLevel;
+	case ESpinUnlockStat::ObstaclesCleared: return Profile->ObstaclesCleared;
+	case ESpinUnlockStat::JamsFixed:        return Profile->JamsFixed;
+	case ESpinUnlockStat::RunsPlayed:       return Profile->RunsPlayed;
+	default:                                return 0;
+	}
+}
+
+void ASpinGameMode::GetModifierProgress(ESpinModifier Modifier, int32& OutCurrent, int32& OutTarget) const
+{
+	const FSpinModifierInfo& Info = GetModifierInfo(Modifier);
+	OutTarget = Info.Target;
+	OutCurrent = GetUnlockStat(Info.Stat);
+}
+
+bool ASpinGameMode::IsModifierUnlocked(ESpinModifier Modifier) const
+{
+	int32 Current = 0, Target = 0;
+	GetModifierProgress(Modifier, Current, Target);
+	return Current >= Target;
+}
+
+int32 ASpinGameMode::GetUnlockedModifiers() const
+{
+	int32 Mask = 0;
+	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
+	{
+		if (IsModifierUnlocked(static_cast<ESpinModifier>(i)))
+		{
+			Mask |= 1 << i;
+		}
+	}
+	return Mask;
 }
 
 int32 ASpinGameMode::GetTodayKey()
@@ -1088,12 +1062,12 @@ const FSpinBonusInfo& ASpinGameMode::GetBonusInfo(ESpinBonus Bonus)
 	// Effects live in the GetRun* functions; keep the descriptions in step with them.
 	static const FSpinBonusInfo Infos[] =
 	{
-		{ TEXT("WIDE OPEN"),    TEXT("Target zones start 15% wider."),                         TEXT("Reach level 10"),     ESpinBonusStat::BestLevel,        10 },
-		{ TEXT("EXTRA MISSES"), TEXT("Two more miss lives: five in all."),                     TEXT("Reach level 15"),     ESpinBonusStat::BestLevel,        15 },
-		{ TEXT("SECOND WIND"),  TEXT("Your first obstacle hit each run doesn't cost a life."), TEXT("Clear 50 obstacles"), ESpinBonusStat::ObstaclesCleared, 50 },
-		{ TEXT("STEADY HANDS"), TEXT("Jams take 2 fewer presses, with half again the time."),  TEXT("Fix 25 jams"),        ESpinBonusStat::JamsFixed,        25 },
-		{ TEXT("BREATHER"),     TEXT("Invincibility after a miss lasts 2 seconds longer."),    TEXT("Play 25 runs"),       ESpinBonusStat::RunsPlayed,       25 },
-		{ TEXT("EARLY WARNING"), TEXT("Jam sparks last 50% longer before the hand jams."),     TEXT("Fix 10 jams"),        ESpinBonusStat::JamsFixed,        10 },
+		{ TEXT("WIDE OPEN"),    TEXT("Target zones start 15% wider."),                         TEXT("Reach level 10"),     ESpinUnlockStat::BestLevel,        10 },
+		{ TEXT("EXTRA MISSES"), TEXT("Two more miss lives: five in all."),                     TEXT("Reach level 15"),     ESpinUnlockStat::BestLevel,        15 },
+		{ TEXT("SECOND WIND"),  TEXT("Your first obstacle hit each run doesn't cost a life."), TEXT("Clear 50 obstacles"), ESpinUnlockStat::ObstaclesCleared, 50 },
+		{ TEXT("STEADY HANDS"), TEXT("Jams take 2 fewer presses, with half again the time."),  TEXT("Fix 25 jams"),        ESpinUnlockStat::JamsFixed,        25 },
+		{ TEXT("BREATHER"),     TEXT("Invincibility after a miss lasts 2 seconds longer."),    TEXT("Play 25 runs"),       ESpinUnlockStat::RunsPlayed,       25 },
+		{ TEXT("EARLY WARNING"), TEXT("Jam sparks last 50% longer before the hand jams."),     TEXT("Fix 10 jams"),        ESpinUnlockStat::JamsFixed,        10 },
 	};
 	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinBonus::Count), "One entry per bonus");
 	return Infos[FMath::Clamp(static_cast<int32>(Bonus), 0, static_cast<int32>(ESpinBonus::Count) - 1)];
@@ -1115,21 +1089,8 @@ FString ASpinGameMode::GetBonusNames(int32 Mask)
 void ASpinGameMode::GetBonusProgress(ESpinBonus Bonus, int32& OutCurrent, int32& OutTarget) const
 {
 	const FSpinBonusInfo& Info = GetBonusInfo(Bonus);
-	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
 	OutTarget = Info.Target;
-	OutCurrent = 0;
-	if (!Profile)
-	{
-		return;
-	}
-
-	switch (Info.Stat)
-	{
-	case ESpinBonusStat::BestLevel:        OutCurrent = Profile->BestLevel; break;
-	case ESpinBonusStat::ObstaclesCleared: OutCurrent = Profile->ObstaclesCleared; break;
-	case ESpinBonusStat::JamsFixed:        OutCurrent = Profile->JamsFixed; break;
-	case ESpinBonusStat::RunsPlayed:       OutCurrent = Profile->RunsPlayed; break;
-	}
+	OutCurrent = GetUnlockStat(Info.Stat);
 }
 
 bool ASpinGameMode::IsBonusUnlocked(ESpinBonus Bonus) const
@@ -1294,86 +1255,72 @@ void ASpinGameMode::CancelName()
 void ASpinGameMode::OpenModifiers()
 {
 	State = ESpinState::ModifierSelect;
-	MenuFocus = GetFocusRowCount(); // START
 }
 
-void ASpinGameMode::OpenBonuses()
+bool ASpinGameMode::IsMenuScreen() const
 {
-	State = ESpinState::BonusSelect;
-	MenuFocus = GetFocusRowCount(); // START
-}
+	if (IsPauseMenuOpen())
+	{
+		return true;
+	}
 
-int32 ASpinGameMode::GetFocusRowCount() const
-{
 	switch (State)
 	{
-	case ESpinState::ModifierSelect: return static_cast<int32>(ESpinModifier::Count);
-	case ESpinState::BonusSelect:    return static_cast<int32>(ESpinBonus::Count);
-	default:                         return 0;
+	case ESpinState::WaitingToStart:
+	case ESpinState::ModeSelect:
+	case ESpinState::ModifierSelect:
+	case ESpinState::SettingsMenu:
+	case ESpinState::Leaderboard:
+	case ESpinState::ProfileSelect:
+	case ESpinState::NameEntry:
+	case ESpinState::GameOver:
+		return true;
+	default:
+		return false;
 	}
 }
 
-int32 ASpinGameMode::GetFocusButtonCount() const
+void ASpinGameMode::HandleMenuBack()
 {
-	switch (State)
+	// From the pause menu, back is "resume" - pressing B / O out of habit mustn't throw the run away.
+	if (IsPauseMenuOpen())
 	{
-	case ESpinState::ModifierSelect: return 3; // START, BONUSES, BACK
-	case ESpinState::BonusSelect:    return 2; // START, BACK
-	default:                         return 0;
-	}
-}
-
-void ASpinGameMode::HandleMenuNav(int32 DX, int32 DY)
-{
-	const int32 Rows = GetFocusRowCount();
-	const int32 Buttons = GetFocusButtonCount();
-	if (Buttons == 0)
-	{
+		HandleMenuAction(EMenuAction::ResumeGame);
 		return;
 	}
 
-	if (MenuFocus < Rows)
+	switch (State)
 	{
-		// Up and down through the rows; down from the last one lands on START.
-		MenuFocus = FMath::Clamp(MenuFocus + DY, 0, Rows);
-	}
-	else if (DY < 0 && Rows > 0)
-	{
-		MenuFocus = Rows - 1;
-	}
-	else
-	{
-		MenuFocus = Rows + FMath::Clamp(MenuFocus - Rows + DX, 0, Buttons - 1);
-	}
-}
+	case ESpinState::ProfileSelect:
+		// Backing out of "delete this player?" just cancels it.
+		HandleMenuAction(PendingDeleteProfile != INDEX_NONE ? EMenuAction::CancelDeleteProfile : EMenuAction::Back);
+		break;
 
-void ASpinGameMode::ActivateMenuFocus()
-{
-	const int32 Rows = GetFocusRowCount();
-	if (MenuFocus < Rows)
-	{
-		HandleMenuAction(State == ESpinState::ModifierSelect ? EMenuAction::ToggleModifier : EMenuAction::ToggleBonus, MenuFocus);
-		return;
-	}
+	case ESpinState::ModeSelect:
+	case ESpinState::ModifierSelect:
+	case ESpinState::SettingsMenu:
+	case ESpinState::Leaderboard:
+		HandleMenuAction(EMenuAction::Back);
+		break;
 
-	// Same order as the buttons are drawn, left to right.
-	static const EMenuAction ModifierButtons[] = { EMenuAction::StartEndless, EMenuAction::OpenBonuses, EMenuAction::Back };
-	static const EMenuAction BonusButtons[] = { EMenuAction::StartEndless, EMenuAction::Back };
-	const int32 Button = MenuFocus - Rows;
-	if (State == ESpinState::ModifierSelect && Button < UE_ARRAY_COUNT(ModifierButtons))
-	{
-		HandleMenuAction(ModifierButtons[Button]);
-	}
-	else if (State == ESpinState::BonusSelect && Button < UE_ARRAY_COUNT(BonusButtons))
-	{
-		HandleMenuAction(BonusButtons[Button]);
+	case ESpinState::NameEntry:
+		CancelName();
+		break;
+
+	case ESpinState::GameOver:
+		HandleMenuAction(EMenuAction::ReturnToMainMenu); // waits for the menu to be ready, like the button
+		break;
+
+	default:
+		// The main menu is the top level - nothing to back out to.
+		break;
 	}
 }
 
 void ASpinGameMode::HandleStartButton()
 {
 	// On the screens right before a run, Start starts it; during a run it pauses.
-	if (State == ESpinState::ModifierSelect || State == ESpinState::BonusSelect)
+	if (State == ESpinState::ModifierSelect)
 	{
 		StartGame();
 		return;
@@ -1391,7 +1338,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	bDailyRun = bDaily;
 	bRunFromTutorial = false;
 	RunDayKey = GetTodayKey();
-	RunModifiers = bDaily ? GetDailyModifiers() : SelectedModifiers;
+	RunModifiers = bDaily ? GetDailyModifiers() : SelectedModifiers & GetUnlockedModifiers(); // a locked one can't be played, even if saved as picked
 	RunPointsMultiplier = GetModifiersMultiplier(RunModifiers);
 	// Everyone plays the daily on the same terms, so no bonuses there.
 	RunBonuses = bDaily ? 0 : GetEquippedBonuses();
@@ -2116,11 +2063,6 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		{
 			OpenModeSelect();
 		}
-		else if (State == ESpinState::BonusSelect)
-		{
-			OpenModifiers();
-			MenuFocus = GetFocusRowCount() + 1; // back on BONUSES
-		}
 		else if (State == ESpinState::ModeSelect || State == ESpinState::SettingsMenu || State == ESpinState::Leaderboard
 			|| State == ESpinState::ProfileSelect)
 		{
@@ -2136,21 +2078,14 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::StartEndless:
-		if (State == ESpinState::ModifierSelect || State == ESpinState::BonusSelect)
+		if (State == ESpinState::ModifierSelect)
 		{
 			StartGame();
 		}
 		break;
 
-	case EMenuAction::OpenBonuses:
-		if (State == ESpinState::ModifierSelect)
-		{
-			OpenBonuses();
-		}
-		break;
-
 	case EMenuAction::ToggleBonus:
-		if (State == ESpinState::BonusSelect && SaveData && SaveData->Profiles.IsValidIndex(SaveData->ActiveProfile)
+		if (State == ESpinState::ModifierSelect && SaveData && SaveData->Profiles.IsValidIndex(SaveData->ActiveProfile)
 			&& Index >= 0 && Index < static_cast<int32>(ESpinBonus::Count) && IsBonusUnlocked(static_cast<ESpinBonus>(Index)))
 		{
 			// Switching one off always works; switching one on needs a free slot.
@@ -2161,7 +2096,7 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 			{
 				Profile.EquippedBonuses = Equipped & ~Bit;
 			}
-			else if (FMath::CountBits(static_cast<uint64>(Equipped)) < GetBonusSlots())
+			else if (FMath::CountBits(static_cast<uint32>(Equipped)) < GetBonusSlots())
 			{
 				Profile.EquippedBonuses = Equipped | Bit;
 			}
@@ -2177,7 +2112,8 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		break;
 
 	case EMenuAction::ToggleModifier:
-		if (State == ESpinState::ModifierSelect && Index >= 0 && Index < static_cast<int32>(ESpinModifier::Count))
+		if (State == ESpinState::ModifierSelect && Index >= 0 && Index < static_cast<int32>(ESpinModifier::Count)
+			&& IsModifierUnlocked(static_cast<ESpinModifier>(Index)))
 		{
 			SelectedModifiers ^= 1 << Index;
 			if (SaveData)

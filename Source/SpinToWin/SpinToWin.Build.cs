@@ -11,7 +11,8 @@ public class SpinToWin : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
 
 		// SlateCore: FSlateFontInfo, used by the HUD to draw large text crisply.
-		PrivateDependencyModuleNames.AddRange(new string[] { "SlateCore" });
+		// RenderCore: GWhiteTexture, which the HUD fills its shapes with.
+		PrivateDependencyModuleNames.AddRange(new string[] { "SlateCore", "RenderCore" });
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

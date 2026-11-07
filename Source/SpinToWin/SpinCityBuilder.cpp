@@ -2,6 +2,9 @@
 
 #include "SpinCityBuilder.h"
 #include "SpinGameMode.h"
+#include "SpinCityFX.h"
+#include "SpinClock.h"
+#include "EngineUtils.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
@@ -133,6 +136,13 @@ ASpinCityBuilder::ASpinCityBuilder()
 		FlickerSigns.Add(MakeISM(*FString::Printf(TEXT("FlickerSigns%d"), i), Cube));
 	}
 	Motes = MakeISM(TEXT("Motes"), Cube);
+
+	for (int32 i = 0; i < MaxRipples; ++i)
+	{
+		UInstancedStaticMeshComponent* Ring = MakeISM(*FString::Printf(TEXT("Ripple%d"), i), Cube);
+		Ring->SetVisibility(false); // only while a ripple is spreading in this slot
+		RippleRings.Add(Ring);
+	}
 }
 
 void ASpinCityBuilder::OnConstruction(const FTransform& Transform)
@@ -249,6 +259,17 @@ void ASpinCityBuilder::SetupMaterials()
 
 	MoteMID = MakeMID(Glow, MoteColor, MoteIntensity);
 	Motes->SetMaterial(0, MoteMID);
+
+	RippleMIDs.Reset();
+	for (UInstancedStaticMeshComponent* Ring : RippleRings)
+	{
+		UMaterialInstanceDynamic* MID = MakeMID(Glow, FLinearColor::White, 0.f);
+		if (Ring)
+		{
+			Ring->SetMaterial(0, MID);
+		}
+		RippleMIDs.Add(MID);
+	}
 
 	// The night sky: the moon's direction from its azimuth and elevation, the clouds' drift and look.
 	if (SkyMaterial)
@@ -389,6 +410,7 @@ void ASpinCityBuilder::Tick(float DeltaSeconds)
 	UpdateWindows(DeltaSeconds, Flare);
 	UpdateSignFlicker(DeltaSeconds, Flare);
 	UpdateMotes(DeltaSeconds, World->GetTimeSeconds());
+	UpdateRipples(DeltaSeconds, Flare);
 	UpdateFlyingCars(DeltaSeconds);
 }
 
@@ -435,6 +457,8 @@ void ASpinCityBuilder::InitLife()
 	{
 		Motes->AddInstances(MoteTransforms, false, false);
 	}
+
+	InitRipples();
 
 	// Flying cars. About half stream along the avenues that lead away from the camera (out and back),
 	// the rest circle above the ring roads. (Avenues toward the camera are left empty, so nothing
@@ -649,6 +673,217 @@ void ASpinCityBuilder::UpdateMotes(float DeltaSeconds, float Time)
 	}
 
 	Motes->BatchUpdateInstancesTransforms(0, MoteTransforms, false, true);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Water ripples
+// ---------------------------------------------------------------------------------------------
+
+void ASpinCityBuilder::InitRipples()
+{
+	// Every slot gets its ring of segments up front; they're only moved around after this.
+	RippleState.Init(FRipple(), MaxRipples);
+	RippleTransforms.Init(FTransform(FQuat::Identity, FVector::ZeroVector, FVector::ZeroVector), NumRippleSegments);
+	for (UInstancedStaticMeshComponent* Ring : RippleRings)
+	{
+		if (Ring)
+		{
+			Ring->ClearInstances();
+			Ring->AddInstances(RippleTransforms, false, false);
+			Ring->SetVisibility(false);
+		}
+	}
+	RippleOwed = 0.f;
+	LastRippleHitTime = GameMode.IsValid() ? GameMode->LastHitTime : -1000.f;
+
+	CityFX = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<ASpinCityFX> It(World); It; ++It)
+		{
+			CityFX = *It;
+			break;
+		}
+	}
+}
+
+bool ASpinCityBuilder::IsOnWater(const FVector2D& Pos) const
+{
+	const float Shore = GetShoreX();
+	if (bLake && Shore > 0.f && Pos.X < Shore - 30.f)
+	{
+		return true;
+	}
+	if (bRiver)
+	{
+		const float Start = Shore > 0.f ? Shore : PlazaRadius + 300.f;
+		return Pos.X > Start - 30.f && Pos.X < GetRiverEnd() - 30.f && FMath::Abs(Pos.Y) < RiverWidth * 0.5f - 30.f;
+	}
+	return false;
+}
+
+void ASpinCityBuilder::StartRipple(const FVector2D& Center, float StartRadius, float EndRadius, float Duration, float Width,
+	const FLinearColor& Color, float Intensity, float Delay)
+{
+	// A free slot, or failing that the one closest to finishing.
+	int32 Slot = INDEX_NONE;
+	float BestLeft = BIG_NUMBER;
+	for (int32 i = 0; i < RippleState.Num(); ++i)
+	{
+		if (!RippleState[i].bActive)
+		{
+			Slot = i;
+			break;
+		}
+		const float Left = RippleState[i].Duration - RippleState[i].Age;
+		if (Left < BestLeft)
+		{
+			BestLeft = Left;
+			Slot = i;
+		}
+	}
+	if (Slot == INDEX_NONE || !RippleMIDs.IsValidIndex(Slot) || !RippleMIDs[Slot])
+	{
+		return;
+	}
+
+	FRipple& R = RippleState[Slot];
+	R.bActive = true;
+	R.Age = -Delay;
+	R.Duration = Duration;
+	R.Center = Center;
+	R.StartRadius = StartRadius;
+	R.EndRadius = EndRadius;
+	R.Width = Width;
+	R.Intensity = Intensity;
+	R.Seed = FMath::FRandRange(0.f, 100.f);
+	RippleMIDs[Slot]->SetVectorParameterValue(ColorParam, Color);
+	RippleMIDs[Slot]->SetScalarParameterValue(IntensityParam, 0.f);
+}
+
+void ASpinCityBuilder::UpdateRipples(float DeltaSeconds, float Flare)
+{
+	if (!bRipples || RippleState.Num() != RippleRings.Num() || RippleMIDs.Num() != RippleRings.Num())
+	{
+		return;
+	}
+
+	const ASpinGameMode* GM = GameMode.Get();
+
+	// Every hit sends a shockwave out across the water from the dial's rim, coloured by how good it was.
+	if (GM && GM->LastHitTime != LastRippleHitTime)
+	{
+		LastRippleHitTime = GM->LastHitTime;
+		if (const ASpinClock* Clock = GM->GetClock())
+		{
+			const FVector2D Center(GetActorTransform().InverseTransformPosition(Clock->GetActorLocation()));
+			const float Rim = FVector::Dist2D(Clock->GetDialWorldLocation(90.f, 1.f), Clock->GetDialWorldLocation(270.f, 1.f)) * 0.5f;
+			const FLinearColor Color = GM->LastHitGrade == ESpinHitGrade::Perfect ? FLinearColor(1.f, 0.75f, 0.15f)
+				: GM->LastHitGrade == ESpinHitGrade::Good ? Palette.IsValidIndex(0) ? Palette[0] : FLinearColor(0.f, 1.f, 1.f)
+				: Palette.IsValidIndex(3) ? Palette[3] : FLinearColor(0.55f, 0.f, 1.f);
+			const float Width = LineWidthAt(Center + FVector2D(Rim, 0.f)) * RippleWidthScale * 2.f;
+			StartRipple(Center, Rim, Rim * HitRippleReach, HitRippleTime, Width, Color, HitRippleIntensity);
+			// A PERFECT rings twice.
+			if (GM->LastHitGrade == ESpinHitGrade::Perfect)
+			{
+				StartRipple(Center, Rim, Rim * HitRippleReach * 0.75f, HitRippleTime, Width * 0.6f, Color, HitRippleIntensity * 0.6f, 0.14f);
+			}
+		}
+	}
+
+	// Ambient ripples, like rain: more as the hand speeds up, and spread over as much water as the
+	// city's light has reached (beyond that the neon is dark anyway).
+	const float Reach = FMath::Clamp(CityFX.IsValid() ? CityFX->GetRevealOuterRadius() : RippleMaxDistance, RippleMinDistance + 1500.f, FMath::Max(RippleMinDistance + 1500.f, RippleMaxDistance));
+	const float AreaBoost = FMath::Clamp(Reach / 5000.f, 1.f, 3.f);
+	RippleOwed += FMath::Lerp(RippleRateMin, RippleRateMax, CurrentFloorSpeed) * AreaBoost * DeltaSeconds;
+	while (RippleOwed >= 1.f)
+	{
+		RippleOwed -= 1.f;
+		for (int32 Try = 0; Try < 8; ++Try)
+		{
+			const float Angle = FMath::FRandRange(0.f, 2.f * PI);
+			// Square root: spread evenly over the area rather than bunched near the dial.
+			const float Dist = FMath::Lerp(RippleMinDistance, Reach, FMath::Sqrt(FMath::FRand()));
+			const FVector2D Pos(FMath::Cos(Angle) * Dist, FMath::Sin(Angle) * Dist);
+			if (Pos.X < -CameraBackDistance * 0.6f || !IsOnWater(Pos))
+			{
+				continue; // behind the camera, or on land
+			}
+
+			// Far-off ones are drawn bigger and bolder, so they still read from the camera.
+			const float Width = LineWidthAt(Pos) * RippleWidthScale;
+			const float Size = RippleSize * FMath::Max(1.f, Width / FMath::Max(1.f, LineWidth * RippleWidthScale)) * FMath::FRandRange(0.6f, 1.4f);
+			const float Duration = RippleLifetime * FMath::FRandRange(0.8f, 1.2f);
+			const FLinearColor Color = Palette.Num() > 0 ? Palette[FMath::RandHelper(FMath::Min(4, Palette.Num()))] : FLinearColor::White;
+			StartRipple(Pos, Size * 0.05f, Size, Duration, Width, Color, RippleIntensity);
+			// Most drops leave a fainter ring or two following the first.
+			const int32 Followers = FMath::RandRange(0, 2);
+			for (int32 f = 1; f <= Followers; ++f)
+			{
+				StartRipple(Pos, Size * 0.05f, Size * (1.f - 0.25f * f), Duration * (1.f - 0.15f * f), Width * 0.7f, Color, RippleIntensity * (1.f - 0.3f * f), 0.22f * f);
+			}
+			break;
+		}
+	}
+
+	// Spread each ripple out, slowing as it goes (like the real thing), thinning and fading away. Its
+	// ring wobbles a little, so it reads as water rather than a perfect neon circle.
+	for (int32 i = 0; i < RippleState.Num(); ++i)
+	{
+		FRipple& R = RippleState[i];
+		UInstancedStaticMeshComponent* Ring = RippleRings[i];
+		if (!R.bActive || !Ring)
+		{
+			continue;
+		}
+		R.Age += DeltaSeconds;
+		if (R.Age >= R.Duration)
+		{
+			R.bActive = false;
+			Ring->SetVisibility(false);
+			continue;
+		}
+		if (R.Age < 0.f)
+		{
+			continue; // still waiting to start
+		}
+		if (!Ring->IsVisible())
+		{
+			Ring->SetVisibility(true);
+		}
+
+		const float T = R.Age / FMath::Max(0.01f, R.Duration);
+		const float Radius = FMath::Lerp(R.StartRadius, R.EndRadius, 1.f - FMath::Pow(1.f - T, 2.2f));
+		const float Width = R.Width * FMath::Lerp(1.3f, 0.45f, T);
+		const float Fade = FMath::SmoothStep(0.f, 0.06f, T) * FMath::Pow(1.f - T, 1.6f);
+		RippleMIDs[i]->SetScalarParameterValue(IntensityParam, R.Intensity * Fade * Flare);
+
+		auto PointAt = [&R, Radius](float A)
+		{
+			const float Wobble = 1.f + 0.022f * FMath::Sin(3.f * A + R.Seed) + 0.014f * FMath::Sin(5.f * A - R.Age * 3.f + R.Seed * 1.7f);
+			return R.Center + FVector2D(FMath::Cos(A), FMath::Sin(A)) * Radius * Wobble;
+		};
+		const float Step = 2.f * PI / NumRippleSegments;
+		FVector2D Prev = PointAt(0.f);
+		for (int32 k = 0; k < NumRippleSegments; ++k)
+		{
+			const FVector2D Next = PointAt(Step * (k + 1));
+			const FVector2D Mid = (Prev + Next) * 0.5f;
+			if (!IsOnWater(Mid))
+			{
+				// Clipped where it meets the shore.
+				RippleTransforms[k] = FTransform(FQuat::Identity, FVector(Mid, 0.f), FVector::ZeroVector);
+			}
+			else
+			{
+				const FVector2D Delta = Next - Prev;
+				const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Delta.Y, Delta.X));
+				RippleTransforms[k] = FTransform(FRotator(0.f, Yaw, 0.f), FVector(Mid, 4.f), FVector(Delta.Size() + Width * 0.5f, Width, 1.f) / MeshSize);
+			}
+			Prev = Next;
+		}
+		Ring->BatchUpdateInstancesTransforms(0, RippleTransforms, false, true);
+	}
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -813,6 +813,11 @@ void ASpinClock::Tick(float DeltaSeconds)
 		FMath::CriticallyDampedSmoothing(CameraBlend, CameraBlendRate, TargetBlend, 0.f, DeltaSeconds, SmoothTime);
 		SetCameraBase(CameraBlend);
 	}
+	else
+	{
+		SetCameraBase(FMath::Max(0.f, CameraBlend));
+	}
+	ApplyMenuShot(DeltaSeconds);
 
 	UpdateDialGrowth(DeltaSeconds);
 	UpdateCameraMotion(DeltaSeconds);
@@ -828,6 +833,11 @@ void ASpinClock::UpdateDialGrowth(float DeltaSeconds)
 		{
 			TargetScale = FMath::Max(TargetScale, Step.Scale);
 		}
+	}
+
+	if (UpdateCollapse(DeltaSeconds, TargetScale))
+	{
+		return;
 	}
 
 	const float OldScale = DialScale;
@@ -891,6 +901,98 @@ void ASpinClock::UpdateDialGrowth(float DeltaSeconds)
 	{
 		DialPivot->SetRelativeLocation(Jitter);
 	}
+}
+
+bool ASpinClock::UpdateCollapse(float DeltaSeconds, float TargetScale)
+{
+	const ASpinGameMode* GM = GameMode.Get();
+	const bool bGameOver = GM && GM->State == ESpinState::GameOver;
+
+	if (!bCollapsing)
+	{
+		if (!bGameOver || DialGrowTo < 0.f)
+		{
+			return false;
+		}
+
+		// The run just ended: the dial breaks down. It whirls on the way the hand was going, and
+		// skids off in a random direction.
+		bCollapsing = true;
+		CollapseElapsed = 0.f;
+		CollapseYaw = 0.f;
+		CollapseSpinSign = GM->Direction < 0.f ? -1.f : 1.f;
+		CollapseFromScale = DialScale;
+		const float DriftAngle = FMath::FRandRange(0.f, 2.f * PI);
+		CollapseDriftDir = FVector(FMath::Cos(DriftAngle), FMath::Sin(DriftAngle), 0.f);
+		HandGlitchTimer = JamGlitchTime; // the hand glitches with it
+	}
+	else if (!bGameOver)
+	{
+		// Leaving the game-over screen: back on its track, and glitching back in from nothing using
+		// the ordinary growth glitch.
+		bCollapsing = false;
+		DialPivot->SetHiddenInGame(false, true);
+		DialPivot->SetRelativeRotation(FRotator::ZeroRotator);
+		DialScale = DialGrowFrom = 0.05f;
+		DialGrowTo = TargetScale;
+		DialGrowElapsed = 0.f;
+		return false;
+	}
+
+	// Keep the growth step in sync with the camera, so coming back lands on the right size.
+	DialGrowTo = TargetScale;
+
+	CollapseElapsed += DeltaSeconds;
+	const float T = FMath::Clamp(CollapseElapsed / FMath::Max(0.1f, CollapseTime), 0.f, 1.f);
+	if (T >= 1.f)
+	{
+		// Gone: nothing left of the dial until the screen is left.
+		if (!DialPivot->bHiddenInGame)
+		{
+			DialPivot->SetHiddenInGame(true, true);
+		}
+		DialGlitch = 0.f;
+		return true;
+	}
+
+	// Every few frames the glitch jumps: a new colour, offset and (once shrinking) size. The HUD draws
+	// its pixel blocks from the same seed, so they flicker together.
+	DialGlitchSeed = static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(CollapseElapsed * DialGlitchRate)), 0xC011u));
+	const FRandomStream Glitch(DialGlitchSeed);
+	DialGlitchTint = GlitchPalette[Glitch.RandHelper(UE_ARRAY_COUNT(GlitchPalette))];
+	DialGlitch = FMath::Lerp(0.6f, 1.f, T);
+
+	// Spins off its track: whirling faster and faster, tipping into a wobble like a dropped coin,
+	// and skidding away from its spot.
+	CollapseYaw += CollapseSpinSign * CollapseSpinSpeed * T * T * DeltaSeconds;
+	const float Tilt = CollapseTilt * FMath::SmoothStep(0.f, 0.6f, T);
+	const float WobblePhase = CollapseElapsed * 14.f;
+	DialPivot->SetRelativeRotation(FRotator(Tilt * FMath::Sin(WobblePhase), CollapseYaw, Tilt * FMath::Cos(WobblePhase)));
+
+	const FVector Drift = CollapseDriftDir * (DialRadius * CollapseDrift * T * T);
+	const FVector Jitter = FVector(Glitch.FRandRange(-1.f, 1.f), Glitch.FRandRange(-1.f, 1.f), 0.f) * DialGlitchJitter * 2.f * DialGlitch;
+	DialPivot->SetRelativeLocation(Drift + Jitter);
+
+	// Collapses: shrinks away in glitchy jumps, now and then snapping back bigger or squashed flat
+	// on one side, down to a speck.
+	const float Shrink = FMath::SmoothStep(FMath::Min(CollapseShrinkStart, 0.95f), 1.f, T);
+	float Scale = CollapseFromScale * FMath::Max(0.02f, 1.f - Shrink);
+	FVector Squash(1.f);
+	if (Shrink > 0.f)
+	{
+		const float Roll = Glitch.FRand();
+		if (Roll < 0.2f)
+		{
+			Scale *= Glitch.FRandRange(1.f, 1.6f);
+		}
+		else if (Roll < 0.45f)
+		{
+			Squash = Glitch.FRand() < 0.5f ? FVector(Glitch.FRandRange(0.2f, 0.7f), 1.f, 1.f) : FVector(1.f, Glitch.FRandRange(0.2f, 0.7f), 1.f);
+		}
+	}
+	DialScale = Scale;
+	DialPivot->SetRelativeScale3D(Squash * Scale);
+	return true;
 }
 
 void ASpinClock::UpdateMusic(const ASpinGameMode& GM)
@@ -1660,6 +1762,40 @@ void ASpinClock::SetCameraBase(float Blend)
 	Camera->SetRelativeRotation(CameraBaseRotation);
 }
 
+void ASpinClock::ApplyMenuShot(float DeltaSeconds)
+{
+	// Down low on the menus and game over; the play camera for the whole run (pause and the
+	// explanation screens included, so they don't swoop the camera about mid-run).
+	const ASpinGameMode* GM = GameMode.Get();
+	const float Target = (GM && !GM->IsInRun()) ? 1.f : 0.f;
+	if (MenuBlend < 0.f)
+	{
+		MenuBlend = Target; // first frame: start in place, no swoop
+		MenuBlendRate = 0.f;
+	}
+	FMath::CriticallyDampedSmoothing(MenuBlend, MenuBlendRate, Target, 0.f, DeltaSeconds, MenuCameraTransitionTime);
+	MenuBlend = FMath::Clamp(MenuBlend, 0.f, 1.f);
+	if (MenuBlend <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Near the ground behind the dial, looking slightly up across it, slowly swinging around it.
+	MenuSwingTime += DeltaSeconds;
+	const float Swing = MenuCameraSwing * FMath::Sin(MenuSwingTime * UE_TWO_PI / MenuCameraSwingPeriod);
+	const FVector MenuLocation = FRotator(0.f, Swing, 0.f).RotateVector(
+		FVector(-DialRadius * MenuCameraDistanceFactor, 0.f, DialRadius * MenuCameraHeightFactor));
+	const FRotator MenuRotation(MenuCameraPitch, Swing, 0.f);
+
+	// Eased at both ends, so the swoop leaves and lands gently.
+	const float T = MenuBlend * MenuBlend * (3.f - 2.f * MenuBlend);
+	CameraBaseLocation = FMath::Lerp(CameraBaseLocation, MenuLocation, T);
+	CameraBaseRotation = FMath::Lerp(CameraBaseRotation, MenuRotation, T);
+	Camera->SetFieldOfView(FMath::Lerp(Camera->FieldOfView, MenuCameraFOV, T));
+	Camera->SetRelativeLocation(CameraBaseLocation);
+	Camera->SetRelativeRotation(CameraBaseRotation);
+}
+
 void ASpinClock::PlayShake(float Intensity)
 {
 	ShakeAmount = FMath::Max(ShakeAmount, FMath::Clamp(Intensity, 0.f, 1.f));
@@ -1703,5 +1839,6 @@ FVector ASpinClock::GetDialWorldLocation(float Angle, float RadiusFraction) cons
 {
 	const float Rad = FMath::DegreesToRadians(Angle);
 	const FVector Direction(FMath::Cos(Rad), FMath::Sin(Rad), 0.f);
-	return GetActorLocation() + Direction * (DialRadius * RadiusFraction * DialScale) + FVector(0.f, 0.f, 12.f);
+	// From the dial's pivot rather than the actor, so it follows the dial when it glitches or skids.
+	return DialPivot->GetComponentLocation() + Direction * (DialRadius * RadiusFraction * DialScale) + FVector(0.f, 0.f, 12.f);
 }

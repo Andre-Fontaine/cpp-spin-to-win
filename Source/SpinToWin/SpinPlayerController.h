@@ -14,11 +14,15 @@
  *   Lift (hold):  Left Mouse Button / Gamepad Right Trigger (R2)
  *   Repair:       Space / Gamepad Y (Triangle) - mashes a jammed hand free
  *   Pause:        P / Gamepad Start (Xbox Menu, PlayStation Options) - starts the run on the modifier and bonus screens
- *   Menu move:    Arrow keys / D-pad / left stick, on the modifier and bonus screens
  *
- * The same Left Mouse Button also drives the menus: on the menu screens (main menu, mode select,
- * settings, leaderboard, profiles, name entry, game over, pause) a click is tested against the HUD's clickable regions instead of being
- * treated as a lift. The mouse cursor is shown automatically whenever one of those screens is up.
+ * On the menu screens (main menu, mode select, modifiers, bonuses, settings, leaderboard, profiles,
+ * name entry, game over, pause - see ASpinGameMode::IsMenuScreen) the same inputs drive the menu instead:
+ *   Move highlight:  Arrow keys / D-pad / left stick (left / right change a settings value)
+ *   Select:          Gamepad A (Cross) / W / Enter - presses the highlighted item
+ *   Back:            Gamepad B (Circle) / D / Esc / Backspace
+ *   Mouse:           hovering moves the highlight, Left Mouse Button presses what's under the cursor
+ * The mouse cursor is shown on those screens while the keyboard and mouse are in use, and hidden
+ * once a gamepad is picked up.
  */
 UCLASS()
 class SPINTOWIN_API ASpinPlayerController : public APlayerController
@@ -49,7 +53,11 @@ private:
 	void OnNavRight();
 	void Navigate(int32 DX, int32 DY);
 	void OnMenuConfirm();
+	void OnMenuBack();
 	void PressButton(int32 ButtonIndex);
+
+	/** Presses the menu item the HUD has highlighted. */
+	void ConfirmFocusedItem();
 	void SetLift(bool bHeld);
 
 	/** One name-entry keystroke: letters, digits, space, backspace, Enter (confirm), Escape (cancel). */
@@ -60,6 +68,9 @@ private:
 	 *  (consuming the click regardless of whether anything was actually under the cursor). */
 	bool TryHandleMenuClick();
 
-	/** Whether the current game state should show a mouse cursor and accept menu clicks. */
+	/** Whether a menu screen is up (see ASpinGameMode::IsMenuScreen). */
 	bool IsInMenuState() const;
+
+	class ASpinGameMode* GetSpinGameMode() const;
+	class ASpinHUD* GetSpinHUD() const;
 };

@@ -8,21 +8,22 @@ A clock-style hand sweeps around a dial. Press the right button while the hand i
 
 | Input | Action |
 |---|---|
-| W / Gamepad A (Xbox) or X (PlayStation) | Hit the first zone, confirm menus/prompts (Tutorial on mode select) |
-| D / Gamepad B (Xbox) or O (PlayStation) | Hit the second zone (unlocks at level 4), confirm menus/prompts |
-| A / Gamepad X (Xbox) or Square (PlayStation) | Hit the third zone (unlocks at level 6), Daily on mode select |
+| W / Gamepad A (Xbox) or X (PlayStation) | Hit the first zone, confirm prompts; select the highlighted item on menus |
+| D / Gamepad B (Xbox) or O (PlayStation) | Hit the second zone (unlocks at level 4); back on menus |
+| A / Gamepad X (Xbox) or Square (PlayStation) | Hit the third zone (unlocks at level 6) |
 | Hold Left Click / Right Trigger | Raise the hand over an obstacle (costs points while up, drops after one full turn) |
 | Space / Gamepad Y (Xbox) or Triangle (PlayStation) | Mash to repair a jammed hand (does nothing the rest of the time) |
-| P / Gamepad Menu (Xbox) or Options (PlayStation) | Pause or resume a run; start the run from the modifier and bonus screens |
-| Arrow keys / D-pad / Left stick | Move the highlight on the modifier and bonus screens (W / Enter / A or X selects) |
-| Mouse | Click buttons on the main menu, mode select, settings, and pause screens |
+| P / Gamepad Menu (Xbox) or Options (PlayStation) | Pause or resume a run; start the run from the run setup screen |
+| Arrow keys / D-pad / Left stick | Move the highlight on every menu (left / right change a settings value) |
+| Enter / Esc or Backspace | Select / back on menus |
+| Mouse | Hover to highlight, click to select, on every menu |
 
-On-screen button prompts follow whichever device you used last (keyboard or gamepad).
+On-screen button prompts follow whichever device you used last (keyboard or gamepad), and the mouse cursor hides while a gamepad is in use.
 
 ## Modes
 
 - **Tutorial** - 7 short, unfailable levels that introduce the zone, the second button, obstacles/the lift, and jams one at a time. Clearing the last one carries straight on into an Endless run at level 5 (after a quick screen explaining lives and misses), with jams already in play.
-- **Endless** - the real run. Before it starts you can switch on optional modifiers (Fast Hand, Tiny Zones, Wild Spin, Early Jams, One Life); each makes the run harder and multiplies every point scored, and boosted runs are tagged on the leaderboard. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life rather than ending the run outright - losing all your obstacle lives costs a miss and refills them, and the run only ends when you're out of misses. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
+- **Endless** - the real run. Before it starts, the run setup screen lets you switch on modifiers (Fast Hand, Tiny Zones, Wild Spin, Early Jams, One Life), each making the run harder and multiplying every point scored, and bonuses that make it more forgiving. Both unlock through play (each shows what it takes and your progress until then), and runs that use them are tagged on the leaderboard. Every 10 hits is a level; speed ramps up, the zone shrinks, a second button unlocks at level 4 and a third at level 6, obstacles start appearing, and eventually the hand can jam and needs mashing to fix. Mistakes cost a life rather than ending the run outright - losing all your obstacle lives costs a miss and refills them, and the run only ends when you're out of misses. Hits decide your level; your score comes from how close to the centre of each zone you hit (PERFECT / GOOD / OK), multiplied by a combo that builds with PERFECT streaks and resets on sloppy hits or mistakes.
 - **Daily** - one run a day that is the same for everyone: a seed and a "twist" modifier picked from the date. Retry as often as you like; your best counts on a separate daily board that starts over each day.
 
 ## Status
@@ -41,14 +42,14 @@ Early prototype.
 - [x] Saved local leaderboard, ranked two ways: highest level and highest score
 - [x] Player profiles: pick or add a player on the main menu; runs go on the shared leaderboard under their name, and personal bests are tracked per player
 - [x] Fast start: once you have reached level 5, the opening levels of each run go by quicker
-- [x] Run modifiers with score multipliers
+- [x] Run modifiers with score multipliers, unlocked through play
 - [x] Daily challenge with its own board
 - [x] End-of-run breakdown (longest combo, points lost to lifting, obstacles hit)
 - [x] Pause menu (resume, restart, main menu)
 - [x] High posts (from level 12): purple posts that float above the dial - pass under them, don't lift
 - [x] Music support: menu and run tracks with crossfades and a game-over sting, a random run track each run, and a saved volume setting (no tracks added yet)
 - [x] A dial that glitches out to a bigger size as the camera pulls back, and neon obstacles that glitch in and out
-- [x] Unlockable bonuses earned through play, equipped into slots that open at levels 25 and 40; runs that use them are marked on the leaderboard
+- [x] Unlockable bonuses earned through play, equipped into slots that open at levels 15 and 25; runs that use them are marked on the leaderboard
 - [x] A procedural neon city that lights up from the dial outward as the run goes on
 - [ ] Online leaderboard
 
