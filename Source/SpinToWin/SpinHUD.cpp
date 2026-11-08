@@ -292,6 +292,11 @@ void ASpinHUD::DrawHUD()
 		}
 		break;
 
+	case ESpinState::UpgradeSelect:
+		DrawRunHUD(*GM);
+		DrawUpgradePick(*GM);
+		break;
+
 	case ESpinState::NewButtonIntro:
 		if (GM->Prompts.IsValidIndex(GM->NewButtonIndex))
 		{
@@ -1444,7 +1449,8 @@ void ASpinHUD::DrawNavLegend(const ASpinGameMode& GM)
 		return;
 	}
 
-	const bool bHasBack = bPaused || GM.State != ESpinState::WaitingToStart;
+	// No backing out of an upgrade pick - one has to be chosen.
+	const bool bHasBack = bPaused || (GM.State != ESpinState::WaitingToStart && GM.State != ESpinState::UpgradeSelect);
 	const TCHAR* BackLabel = bPaused ? TEXT("RESUME")
 		: GM.State == ESpinState::GameOver ? TEXT("MAIN MENU")
 		: GM.State == ESpinState::NameEntry ? TEXT("CANCEL")
@@ -1943,15 +1949,10 @@ void ASpinHUD::DrawZoneLabel(const ASpinGameMode& GM)
 	};
 
 	// A key cap riding on the zone itself; it lights up while the hand is inside - "press now". Once
-	// a blackout has hidden the zone, the cap moves to the middle of the dial and stays unlit, so it
-	// says what to press without giving away where.
+	// a blackout has hidden the zone, the cap goes with it: where and which button are both from memory.
 	if (GM.GetZoneVisibility() >= 0.5f)
 	{
 		DrawCapAt(GM.ActivePromptIndex, Clock->GetZoneWorldLocation(0.5f), GM.IsHandInZone());
-	}
-	else
-	{
-		DrawCapAt(GM.ActivePromptIndex, Clock->GetDialWorldLocation(0.f, 0.f), false);
 	}
 
 	// A pair's second zone carries its own cap.
@@ -3390,6 +3391,102 @@ void ASpinHUD::DrawPauseMenu(const ASpinGameMode& GM)
 	}
 
 	DrawKeyPrompt(TEXT("Press"), GM.GetPauseKey(), TEXT("to resume"), CX, Y, PromptSize, Gold);
+}
+
+void ASpinHUD::DrawUpgradePick(const ASpinGameMode& GM)
+{
+	DrawBackdrop(0.75f);
+
+	const int32 NumCards = GM.UpgradeOffer.Num();
+	if (NumCards == 0)
+	{
+		return;
+	}
+
+	const float CX = ScreenW * 0.5f;
+	const float Gap = U(28.f);
+	const float CardW = FMath::Min(U(340.f), (ScreenW - U(Margin) * 2.f - Gap * (NumCards - 1)) / NumCards);
+	const float CardH = U(300.f);
+	const float P = U(24.f);
+
+	// What the run already has, as "STEADY GRIP x2  +  DEBT".
+	TArray<FString> Owned;
+	for (int32 i = 0; i < static_cast<int32>(ESpinUpgrade::Count); ++i)
+	{
+		const ESpinUpgrade Upgrade = static_cast<ESpinUpgrade>(i);
+		if (const int32 Stacks = GM.GetUpgradeStacks(Upgrade))
+		{
+			const TCHAR* Name = ASpinGameMode::GetUpgradeInfo(Upgrade).Name;
+			Owned.Add(Stacks > 1 ? FString::Printf(TEXT("%s x%d"), Name, Stacks) : FString(Name));
+		}
+	}
+	const float OwnedH = Owned.IsEmpty() ? 0.f : U(28.f) + LineH(TinySize) + LineH(SmallSize);
+
+	const float BlockH = LineH(TinySize) + U(6.f) + LineH(TitleSize) + U(32.f) + CardH + OwnedH;
+	float Y = (ScreenH - BlockH) * 0.5f;
+
+	DrawLabel(FString::Printf(TEXT("LEVEL %d  -  UPGRADE"), GM.GetLevel()), CX, Y, TinySize, Cyan, ESpinTextAlign::Center, true);
+	Y += LineH(TinySize) + U(6.f);
+	DrawNeonText(TEXT("PICK ONE"), CX, Y, TitleSize, Fade(Gold, 0.8f + 0.2f * Pulse01(UiTime, 2.5f)), Gold, 0.35f, ESpinTextAlign::Center, U(1.5f));
+	Y += LineH(TitleSize) + U(32.f);
+
+	const float RowW = CardW * NumCards + Gap * (NumCards - 1);
+	for (int32 i = 0; i < NumCards; ++i)
+	{
+		const ESpinUpgrade Upgrade = GM.UpgradeOffer[i];
+		const FSpinUpgradeInfo& Info = ASpinGameMode::GetUpgradeInfo(Upgrade);
+		const FLinearColor Accent = Info.Kind == ESpinUpgradeKind::Boon ? Green : Info.Kind == ESpinUpgradeKind::Gamble ? Gold : Magenta;
+		const TCHAR* KindLabel = Info.Kind == ESpinUpgradeKind::Boon ? TEXT("BOON") : Info.Kind == ESpinUpgradeKind::Gamble ? TEXT("GAMBLE") : TEXT("CURSE");
+
+		const float X = CX - RowW * 0.5f + i * (CardW + Gap);
+		const FSpinFocusKey Key{ EMenuAction::PickUpgrade, i };
+		const float F = FocusAmount(Key);
+
+		DrawPanel(X, Y, CardW, CardH, Accent);
+		DrawFocusFrame(X, Y, CardW, CardH, Accent, Key);
+
+		float TY = Y + P;
+		DrawLabel(KindLabel, X + CardW * 0.5f, TY, TinySize, Accent, ESpinTextAlign::Center, true);
+		TY += LineH(TinySize) + U(10.f);
+
+		// The name, shrunk until it fits the card.
+		const FString Name = Info.Name;
+		float NameSize = HeadingSize;
+		while (NameSize > 14.f && MeasureText(Name, NameSize, true).X > CardW - P * 2.f)
+		{
+			NameSize -= 1.f;
+		}
+		DrawNeonText(Name, X + CardW * 0.5f, TY, NameSize, FMath::Lerp(TextMain, FLinearColor::White, F), Accent, 0.2f + 0.2f * F, ESpinTextAlign::Center);
+		TY += LineH(NameSize) + U(6.f);
+
+		const int32 Stacks = GM.GetUpgradeStacks(Upgrade);
+		if (Stacks > 0)
+		{
+			DrawLabel(FString::Printf(TEXT("HAVE x%d  -  STACKS"), Stacks), X + CardW * 0.5f, TY, TinySize, TextDim, ESpinTextAlign::Center, true);
+		}
+		TY += LineH(TinySize) + U(14.f);
+
+		for (const FString& Line : WrapText(Info.Description, BodySize, false, CardW - P * 2.f))
+		{
+			DrawLabel(Line, X + CardW * 0.5f, TY, BodySize, FMath::Lerp(TextDim, TextMain, 0.5f + 0.5f * F), ESpinTextAlign::Center);
+			TY += LineH(BodySize);
+		}
+
+		AddRegion(X, Y, CardW, CardH, EMenuAction::PickUpgrade, i);
+		if (i == NumCards / 2)
+		{
+			MarkDefaultFocus(); // start on the middle card
+		}
+	}
+	Y += CardH;
+
+	if (!Owned.IsEmpty())
+	{
+		Y += U(28.f);
+		DrawLabel(TEXT("THIS RUN"), CX, Y, TinySize, TextFaint, ESpinTextAlign::Center, true);
+		Y += LineH(TinySize);
+		DrawLabel(FString::Join(Owned, TEXT("   +   ")), CX, Y, SmallSize, TextDim, ESpinTextAlign::Center, true);
+	}
 }
 
 void ASpinHUD::DrawBriefing(const FString& Eyebrow, const FString& Title, const TArray<FSpinBriefLine>& Lines,

@@ -590,7 +590,38 @@ const FTutorialLevel* ASpinGameMode::GetTutorialLevel() const
 
 bool ASpinGameMode::IsHandInZone() const
 {
-	return FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) <= ZoneHalfWidth;
+	return FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) <= GetZoneHalfWidth();
+}
+
+float ASpinGameMode::GetZoneHalfWidth() const
+{
+	if (IsTutorial())
+	{
+		return ZoneHalfWidth;
+	}
+	// Each Steady Grip still running widens the zones a little more.
+	const int32 Level = GetLevel();
+	int32 Grips = 0;
+	for (const int32 Until : SteadyGripUntilLevel)
+	{
+		Grips += Level <= Until ? 1 : 0;
+	}
+	return ZoneHalfWidth * (1.f + SteadyGripWidthBonus * Grips);
+}
+
+float ASpinGameMode::GetZoneBrightness() const
+{
+	return IsTutorial() ? 1.f : FMath::Pow(BlindFaithDim, static_cast<float>(GetUpgradeStacks(ESpinUpgrade::BlindFaith)));
+}
+
+int32 ASpinGameMode::GetSteadyGripLevelsLeft() const
+{
+	int32 Until = 0;
+	for (const int32 Level : SteadyGripUntilLevel)
+	{
+		Until = FMath::Max(Until, Level);
+	}
+	return FMath::Max(0, Until - GetLevel() + 1);
 }
 
 bool ASpinGameMode::IsBlackoutDark() const
@@ -606,11 +637,12 @@ float ASpinGameMode::GetZoneVisibility() const
 	}
 	// A zone placed while the lights were still flickering gets its look once they're out.
 	const float Since = EventTime - FMath::Max(ZoneShownTime, BlackoutFlickerTime);
-	if (Since <= BlackoutZoneShowTime)
+	const float ShowTime = BlackoutZoneShowTime + AfterglowTime * GetUpgradeStacks(ESpinUpgrade::Afterglow);
+	if (Since <= ShowTime)
 	{
 		return 1.f;
 	}
-	return FMath::Clamp(1.f - (Since - BlackoutZoneShowTime) / BlackoutZoneFadeTime, 0.f, 1.f);
+	return FMath::Clamp(1.f - (Since - ShowTime) / BlackoutZoneFadeTime, 0.f, 1.f);
 }
 
 int32 ASpinGameMode::GetHitsForLevel(int32 Level) const
@@ -747,7 +779,7 @@ void ASpinGameMode::RegisterHit()
 ESpinHitGrade ASpinGameMode::GradeHit() const
 {
 	// 0 = dead centre of the zone, 1 = its very edge.
-	const float Offset = FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) / FMath::Max(0.01f, ZoneHalfWidth);
+	const float Offset = FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) / FMath::Max(0.01f, GetZoneHalfWidth());
 
 	if (Offset <= PerfectFraction)
 	{
@@ -758,6 +790,20 @@ ESpinHitGrade ASpinGameMode::GradeHit() const
 
 void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 {
+	// Tight Lines: only PERFECT counts - a GOOD is graded OK (and breaks the combo), but a PERFECT
+	// pays far more.
+	if (const int32 Tight = GetUpgradeStacks(ESpinUpgrade::TightLines))
+	{
+		if (Grade == ESpinHitGrade::Good)
+		{
+			Grade = ESpinHitGrade::Ok;
+		}
+		else if (Grade == ESpinHitGrade::Perfect)
+		{
+			PointsScale *= 1.f + TightLinesPerfectBonus * Tight;
+		}
+	}
+
 	LastHitGrade = Grade;
 
 	// PERFECT builds the streak, GOOD holds it, OK breaks it.
@@ -777,7 +823,18 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 		: (Grade == ESpinHitGrade::Good) ? GoodPoints
 		: OkPoints;
 
-	LastHitPoints = FMath::RoundToInt(BasePoints * PointsScale * RunPointsMultiplier) * ComboMultiplier;
+	// Blind Faith adds to the run's multiplier; Debt halves the hits it's still owed.
+	const float UpgradeMultiplier = 1.f + BlindFaithPointsBonus * GetUpgradeStacks(ESpinUpgrade::BlindFaith);
+	LastHitPoints = FMath::RoundToInt(BasePoints * PointsScale * RunPointsMultiplier * UpgradeMultiplier) * ComboMultiplier;
+	if (DebtHitsLeft > 0)
+	{
+		--DebtHitsLeft;
+		LastHitPoints /= 2;
+	}
+	if (IsBlackoutDark())
+	{
+		BlackoutPointsEarned += LastHitPoints;
+	}
 	const int32 OldPoints = Points;
 	Points += LastHitPoints;
 
@@ -1358,6 +1415,7 @@ bool ASpinGameMode::IsMenuScreen() const
 	case ESpinState::ProfileSelect:
 	case ESpinState::NameEntry:
 	case ESpinState::GameOver:
+	case ESpinState::UpgradeSelect:
 		return true;
 	default:
 		return false;
@@ -1493,6 +1551,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	bTutorialObstacleHit = false;
 	LiftPointsDebt = 0.f;
 	ResetJam();
+	ResetUpgrades();
 	SetLevelEvent(ESpinLevelEvent::None);
 	PlaceNextZone();
 }
@@ -1559,7 +1618,19 @@ void ASpinGameMode::OnHit()
 	const float RampSteps = static_cast<float>(FMath::Max(1, HitsPerLevel)) / GetHitsForLevel(OldLevel);
 
 	// Grade the hit before anything moves. Hits made in the dark are worth more.
-	ScoreHit(GradeHit(), RampSteps * (IsBlackoutDark() ? BlackoutPointsMultiplier : 1.f));
+	const ESpinHitGrade Grade = GradeHit();
+	float PointsScale = RampSteps * (IsBlackoutDark() ? GetBlackoutPointsMultiplier() : 1.f);
+
+	// Twin Engine: the second of a pair, after a PERFECT first, landing a PERFECT too.
+	const int32 TwinStacks = GetUpgradeStacks(ESpinUpgrade::TwinEngine);
+	if (bPairFirstPerfect && Grade == ESpinHitGrade::Perfect && TwinStacks > 0)
+	{
+		PointsScale *= 1.f + TwinEnginePairBonus * TwinStacks;
+		ShowNotice(TEXT("PERFECT PAIR!"));
+	}
+	bPairFirstPerfect = false;
+
+	ScoreHit(Grade, PointsScale);
 
 	++Hits;
 	RegisterHit();
@@ -1581,6 +1652,7 @@ void ASpinGameMode::OnHit()
 		ActivePromptIndex = SecondPromptIndex;
 		bHasSecondZone = false;
 		bHandWasInZone = false;
+		bPairFirstPerfect = LastHitGrade == ESpinHitGrade::Perfect;
 		return;
 	}
 
@@ -1616,6 +1688,9 @@ void ASpinGameMode::OnHit()
 		SetLevelEvent(bPauseScreen ? ESpinLevelEvent::None : RollLevelEvent(NewLevel, LevelEvent));
 	}
 
+	// Every few levels of a normal run, a pick of upgrades (after any explanation screen).
+	const bool bUpgradeDue = !bDailyRun && UpgradeEveryLevels > 0 && NewLevel / UpgradeEveryLevels > OldLevel / UpgradeEveryLevels;
+
 	// The normal "LEVEL N" banner is skipped when a pause screen takes over instead.
 	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
 	{
@@ -1650,7 +1725,7 @@ void ASpinGameMode::OnHit()
 	PlaceNextZone(!bPauseScreen);
 
 	// Sometimes the hand starts to overheat.
-	if (!bPauseScreen && JamPhase == EJamPhase::None
+	if (!bPauseScreen && !bUpgradeDue && JamPhase == EJamPhase::None
 		&& GetLevel() >= GetRunJamStartLevel() && RunRandom.FRand() < GetRunJamChance())
 	{
 		StartJamSparks();
@@ -1690,6 +1765,18 @@ void ASpinGameMode::OnHit()
 		{
 			SaveData->Profiles[SaveData->ActiveProfile].bSeenHighPosts = true;
 			WriteSaveData();
+		}
+	}
+
+	if (bUpgradeDue)
+	{
+		if (State == ESpinState::Playing)
+		{
+			OpenUpgradePick();
+		}
+		else
+		{
+			bUpgradePending = true; // after the explanation screen, see ResumeAfterIntro
 		}
 	}
 }
@@ -1744,12 +1831,24 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 		bHandWasInZone = false;
 		ZoneShownTime = EventTime;
 		Shake(HitShake);
-		ShowNotice(TEXT("Missed in the dark - the lights are back on"));
+
+		// Borrowed Time: the debt comes due - twice what this blackout earned.
+		if (bBorrowedBlackout)
+		{
+			const int32 Lost = FMath::Min(Points, BlackoutPointsEarned * 2);
+			Points -= Lost;
+			ShowNotice(FString::Printf(TEXT("BORROWED TIME - lost %d points"), Lost));
+		}
+		else
+		{
+			ShowNotice(TEXT("Missed in the dark - the lights are back on"));
+		}
 		return;
 	}
 
 	// A mistake breaks up a pair: only the zone the hand was heading for is left.
 	bHasSecondZone = false;
+	bPairFirstPerfect = false;
 
 	LastMistake = Mistake;
 	Shake(LifeLostShake);
@@ -1846,6 +1945,10 @@ void ASpinGameMode::ResumeAfterIntro()
 {
 	State = ESpinState::Playing;
 	bHandWasInZone = false;
+	if (bUpgradePending)
+	{
+		OpenUpgradePick();
+	}
 }
 
 void ASpinGameMode::EndGame()
@@ -1893,6 +1996,7 @@ void ASpinGameMode::StartTutorial()
 	NoticeTime = -1000.f;
 	Direction = 1.f;
 	ResetJam();
+	ResetUpgrades();
 	SetLevelEvent(ESpinLevelEvent::None);
 	BeginTutorialLevel(0);
 }
@@ -2324,6 +2428,19 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 		}
 		break;
 
+	case EMenuAction::PickUpgrade:
+		if (State == ESpinState::UpgradeSelect && UpgradeOffer.IsValidIndex(Index)
+			&& GetWorld() && GetWorld()->GetTimeSeconds() - UpgradePickOpenTime >= 0.6f)
+		{
+			// Back into the run, with a short countdown to find the hand again.
+			State = ESpinState::Playing;
+			ApplyUpgrade(UpgradeOffer[Index]);
+			UpgradeOffer.Reset();
+			bHandWasInZone = false;
+			ResumeTimeRemaining = bInvincible ? 0.f : UpgradeResumeTime;
+		}
+		break;
+
 	case EMenuAction::RestartRun:
 		if (IsPauseMenuOpen())
 		{
@@ -2558,6 +2675,7 @@ bool ASpinGameMode::IsInRun() const
 	case ESpinState::HighObstacleIntro:
 	case ESpinState::TutorialIntro:
 	case ESpinState::EndlessIntro:
+	case ESpinState::UpgradeSelect:
 		return true;
 	default:
 		return false;
@@ -2740,13 +2858,14 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 
 	// Place the zone ahead of the hand in its current direction of travel.
 	float Offset = RunRandom.FRandRange(MinZoneOffset, MaxZoneOffset);
+	const float HW = GetZoneHalfWidth();
 
 	if (bDouble)
 	{
 		// The second zone sits a gap beyond the first. Pull the pair back if needed so the second one
 		// still ends well before the hand's own position.
-		const float Span = ZoneHalfWidth * 2.f + RunRandom.FRandRange(DoubleZoneMinGap, FMath::Max(DoubleZoneMinGap, DoubleZoneMaxGap));
-		const float MaxFirst = 360.f - 15.f - ZoneHalfWidth - Span;
+		const float Span = HW * 2.f + RunRandom.FRandRange(DoubleZoneMinGap, FMath::Max(DoubleZoneMinGap, DoubleZoneMaxGap));
+		const float MaxFirst = 360.f - 15.f - HW - Span;
 		Offset = FMath::Min(Offset, FMath::Max(MinZoneOffset, MaxFirst));
 		SecondZoneCenter = FMath::Fmod(HandAngle + Direction * (Offset + Span) + 720.f, 360.f);
 		bHasSecondZone = true;
@@ -2768,14 +2887,14 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 	if (bAllowObstacle && Clock && ObstaclesEnabled() && RunRandom.FRand() < Chance)
 	{
 		// The zone must never start on top of the hand, so it can't wrap too close to where the hand is.
-		const float MaxOffset = 360.f - ZoneHalfWidth - 12.f;
+		const float MaxOffset = 360.f - HW - 12.f;
 
 		// The obstacle sits far enough ahead that there is time to see it and lift the hand...
 		float ObstacleDist = FMath::Max(CurrentSpeed * ObstacleWarningTime, MinObstacleDistance) + RunRandom.FRandRange(0.f, 15.f);
-		ObstacleDist = FMath::Min(ObstacleDist, MaxOffset - ObstacleClearGap - ZoneHalfWidth);
+		ObstacleDist = FMath::Min(ObstacleDist, MaxOffset - ObstacleClearGap - HW);
 
 		// ...and the zone sits beyond it, with a gap after it.
-		Offset = FMath::Clamp(FMath::Max(Offset, ObstacleDist + ObstacleClearGap + ZoneHalfWidth), MinZoneOffset, MaxOffset);
+		Offset = FMath::Clamp(FMath::Max(Offset, ObstacleDist + ObstacleClearGap + HW), MinZoneOffset, MaxOffset);
 
 		const float Radius = RunRandom.FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction);
 		// The roll happens either way, so a forced one doesn't change the daily's sequence.
@@ -2806,11 +2925,15 @@ ESpinLevelEvent ASpinGameMode::RollLevelEvent(int32 Level, ESpinLevelEvent Previ
 	// A stream of its own (seed and level only), so adding events never shifts the run's other rolls.
 	const FRandomStream Roll(static_cast<int32>(HashCombine(static_cast<uint32>(RunSeed), 0xE7E00000u + static_cast<uint32>(Level))));
 	const float R = Roll.FRand();
-	if (R < BlackoutChance)
+
+	// Lights Out and Twin Engine make their event more likely, with every stack.
+	const float Blackout = FMath::Min(0.8f, BlackoutChance * FMath::Pow(EventUpgradeChanceScale, static_cast<float>(GetUpgradeStacks(ESpinUpgrade::LightsOut))));
+	const float Double = FMath::Min(0.8f, DoubleZoneChance * FMath::Pow(EventUpgradeChanceScale, static_cast<float>(GetUpgradeStacks(ESpinUpgrade::TwinEngine))));
+	if (R < Blackout)
 	{
 		return Level >= BlackoutStartLevel ? ESpinLevelEvent::Blackout : ESpinLevelEvent::None;
 	}
-	if (R < BlackoutChance + DoubleZoneChance && Level >= DoubleZoneStartLevel)
+	if (R < Blackout + Double && Level >= DoubleZoneStartLevel)
 	{
 		return ESpinLevelEvent::DoubleZone;
 	}
@@ -2824,6 +2947,119 @@ void ASpinGameMode::SetLevelEvent(ESpinLevelEvent Event)
 	ZoneShownTime = 0.f;
 	bBlackoutBroken = false;
 	bHasSecondZone = false;
+	bPairFirstPerfect = false;
+	bBorrowedBlackout = false;
+	BlackoutPointsEarned = 0;
+}
+
+float ASpinGameMode::GetBlackoutPointsMultiplier() const
+{
+	const float Base = BlackoutPointsMultiplier + LightsOutMultiplierBonus * GetUpgradeStacks(ESpinUpgrade::LightsOut);
+	return Base * (bBorrowedBlackout ? 2.f : 1.f);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Upgrades
+// ---------------------------------------------------------------------------------------------
+
+const FSpinUpgradeInfo& ASpinGameMode::GetUpgradeInfo(ESpinUpgrade Upgrade)
+{
+	// Effects live where each one applies; keep the descriptions in step with them.
+	static const FSpinUpgradeInfo Infos[] =
+	{
+		{ TEXT("PATCH JOB"),     TEXT("One miss life back."),                                                ESpinUpgradeKind::Boon },
+		{ TEXT("STEADY GRIP"),   TEXT("Zones 10% wider for the next 3 levels."),                             ESpinUpgradeKind::Boon },
+		{ TEXT("AFTERGLOW"),     TEXT("In a blackout, each zone stays visible 1 second longer."),           ESpinUpgradeKind::Boon },
+		{ TEXT("TIGHT LINES"),   TEXT("PERFECT hits pay 3x - but GOOD hits count as OK."),                   ESpinUpgradeKind::Gamble },
+		{ TEXT("LIGHTS OUT"),    TEXT("Blackouts come twice as often and pay +1x."),                        ESpinUpgradeKind::Gamble },
+		{ TEXT("TWIN ENGINE"),   TEXT("Double zones come twice as often. Two PERFECTs on a pair pay 3x."),  ESpinUpgradeKind::Gamble },
+		{ TEXT("DEBT"),          TEXT("+1000 points now - but your next 10 hits score half."),              ESpinUpgradeKind::Curse },
+		{ TEXT("BLIND FAITH"),   TEXT("Zones are 50% dimmer for the rest of the run. +0.3x points."),       ESpinUpgradeKind::Curse },
+		{ TEXT("BORROWED TIME"), TEXT("This level is a blackout paying double - but a miss in the dark costs twice what it earned."), ESpinUpgradeKind::Curse },
+	};
+	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinUpgrade::Count), "One entry per upgrade");
+	return Infos[FMath::Clamp(static_cast<int32>(Upgrade), 0, static_cast<int32>(ESpinUpgrade::Count) - 1)];
+}
+
+int32 ASpinGameMode::GetUpgradeStacks(ESpinUpgrade Upgrade) const
+{
+	const int32 Index = static_cast<int32>(Upgrade);
+	return UpgradeStacks.IsValidIndex(Index) ? UpgradeStacks[Index] : 0;
+}
+
+void ASpinGameMode::ResetUpgrades()
+{
+	UpgradeStacks.Init(0, static_cast<int32>(ESpinUpgrade::Count));
+	UpgradeOffer.Reset();
+	bUpgradePending = false;
+	SteadyGripUntilLevel.Reset();
+	DebtHitsLeft = 0;
+}
+
+void ASpinGameMode::OpenUpgradePick()
+{
+	bUpgradePending = false;
+
+	// Fully random - not from the run's seed - from every upgrade that would do something now.
+	TArray<ESpinUpgrade> Pool;
+	for (int32 i = 0; i < static_cast<int32>(ESpinUpgrade::Count); ++i)
+	{
+		const ESpinUpgrade Upgrade = static_cast<ESpinUpgrade>(i);
+		if (Upgrade == ESpinUpgrade::PatchJob && MissLives >= GetRunMaxMissLives())
+		{
+			continue; // nothing to patch
+		}
+		Pool.Add(Upgrade);
+	}
+
+	UpgradeOffer.Reset();
+	while (UpgradeOffer.Num() < UpgradeChoices && Pool.Num() > 0)
+	{
+		UpgradeOffer.Add(Pool[FMath::RandRange(0, Pool.Num() - 1)]);
+		Pool.RemoveSingleSwap(UpgradeOffer.Last());
+	}
+
+	if (Clock)
+	{
+		Clock->SetLiftHeld(false, false); // a held lift won't see its release on the pick screen
+	}
+	UpgradePickOpenTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+	State = ESpinState::UpgradeSelect;
+}
+
+void ASpinGameMode::ApplyUpgrade(ESpinUpgrade Upgrade)
+{
+	const int32 Index = static_cast<int32>(Upgrade);
+	if (!UpgradeStacks.IsValidIndex(Index))
+	{
+		return;
+	}
+	++UpgradeStacks[Index];
+
+	switch (Upgrade)
+	{
+	case ESpinUpgrade::PatchJob:
+		if (MissLives < GetRunMaxMissLives())
+		{
+			++MissLives;
+			MissLifeGainedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+		}
+		break;
+	case ESpinUpgrade::SteadyGrip:
+		SteadyGripUntilLevel.Add(GetLevel() + SteadyGripLevels - 1);
+		break;
+	case ESpinUpgrade::Debt:
+		Points += DebtPayout;
+		DebtHitsLeft += DebtHits;
+		break;
+	case ESpinUpgrade::BorrowedTime:
+		// This level becomes a blackout (whatever it rolled), paying double.
+		SetLevelEvent(ESpinLevelEvent::Blackout);
+		bBorrowedBlackout = true;
+		break;
+	default:
+		break; // the rest act wherever they apply
+	}
 }
 
 void ASpinGameMode::UpdateLights(float DeltaSeconds)

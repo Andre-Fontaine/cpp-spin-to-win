@@ -347,6 +347,9 @@ private:
 	/** Drawn over the frozen run HUD while the game is paused. */
 	void DrawPauseMenu(const ASpinGameMode& GM);
 
+	/** The mid-run upgrade pick: the offered cards side by side, and what the run already has. */
+	void DrawUpgradePick(const ASpinGameMode& GM);
+
 	/** The explanation screens (new mechanic unlocks, tutorial stages): eyebrow tag, title, lines,
 	 *  and what to press to continue. */
 	void DrawBriefing(const FString& Eyebrow, const FString& Title, const TArray<FSpinBriefLine>& Lines,

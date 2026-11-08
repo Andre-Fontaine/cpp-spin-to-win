@@ -41,7 +41,9 @@ enum class ESpinState : uint8
 	TutorialIntro,
 	/** The tutorial just ended and the run carries on as Endless: paused on a screen explaining lives
 	 *  and misses until the player presses the first button. */
-	EndlessIntro
+	EndlessIntro,
+	/** Endless: paused on the mid-run pick, three upgrade cards to choose one from. */
+	UpgradeSelect
 };
 
 /** What kind of mistake last cost a life, so the right message and feedback can be shown. */
@@ -118,6 +120,8 @@ enum class EMenuAction : uint8
 	RestartRun,
 	/** Pause menu: abandon the run (it isn't recorded) and go to the main menu. */
 	QuitRunToMenu,
+	/** Upgrade pick: Index = which of the offered cards. */
+	PickUpgrade,
 };
 
 UENUM(BlueprintType)
@@ -212,6 +216,47 @@ enum class ESpinLevelEvent : uint8
 	Blackout,
 	/** Every zone comes as a pair: hit both on the same pass before the hand turns around. */
 	DoubleZone
+};
+
+/** Upgrades picked mid-run (every few levels of a normal Endless run, never the daily). Picking one
+ *  again stacks it. Effects live where each one applies; see ASpinGameMode::GetUpgradeInfo. */
+UENUM(BlueprintType)
+enum class ESpinUpgrade : uint8
+{
+	/** Boon: one miss life back. */
+	PatchJob,
+	/** Boon: zones wider for a few levels. */
+	SteadyGrip,
+	/** Boon: in a blackout, each zone stays visible longer. */
+	Afterglow,
+	/** Gamble: PERFECT hits pay far more, but GOOD hits count as OK. */
+	TightLines,
+	/** Gamble: blackouts come more often and pay more. */
+	LightsOut,
+	/** Gamble: double zones come more often, and a pair of PERFECTs pays a bonus. */
+	TwinEngine,
+	/** Curse: points now, half points on the next hits. */
+	Debt,
+	/** Curse: dimmer zones for a points multiplier. */
+	BlindFaith,
+	/** Curse: the level after the pick is a blackout paying double - but a miss in it costs double what it earned. */
+	BorrowedTime,
+	Count UMETA(Hidden)
+};
+
+enum class ESpinUpgradeKind : uint8
+{
+	Boon,
+	Gamble,
+	Curse
+};
+
+/** Display info for one upgrade, see ASpinGameMode::GetUpgradeInfo. */
+struct FSpinUpgradeInfo
+{
+	const TCHAR* Name;
+	const TCHAR* Description;
+	ESpinUpgradeKind Kind;
 };
 
 UENUM(BlueprintType)
@@ -589,7 +634,7 @@ public:
 
 	/** In the dark, each new zone shows for this long, then fades out over BlackoutZoneFadeTime. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0"))
-	float BlackoutZoneShowTime = 0.6f;
+	float BlackoutZoneShowTime = 0.2f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0.01"))
 	float BlackoutZoneFadeTime = 0.25f;
@@ -620,6 +665,60 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0"))
 	float DoubleZoneMaxGap = 60.f;
 
+	// ---------------- Upgrades (normal Endless runs, not the daily) ----------------
+
+	/** A pick of upgrades comes up every this many levels (on reaching 5, 10, 15, ...). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 UpgradeEveryLevels = 5;
+
+	/** Cards offered at each pick. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1", ClampMax = "9"))
+	int32 UpgradeChoices = 3;
+
+	/** Seconds of countdown after a pick before play picks back up. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0"))
+	float UpgradeResumeTime = 3.f;
+
+	/** Steady Grip: zones this much wider (per stack), for this many levels. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float SteadyGripWidthBonus = 0.1f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 SteadyGripLevels = 3;
+
+	/** Afterglow: seconds longer each zone stays visible in a blackout (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float AfterglowTime = 1.f;
+
+	/** Tight Lines: PERFECT hits pay 1 + this many times more (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float TightLinesPerfectBonus = 2.f;
+
+	/** Lights Out / Twin Engine: event chance multiplied by this (per stack). Lights Out adds this
+	 *  much to the blackout multiplier; Twin Engine's PERFECT pair pays 1 + this much more (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float EventUpgradeChanceScale = 2.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float LightsOutMultiplierBonus = 1.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float TwinEnginePairBonus = 2.f;
+
+	/** Debt: points paid out now, and how many following hits score at half (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	int32 DebtPayout = 1000;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 DebtHits = 10;
+
+	/** Blind Faith: zone brightness multiplied by this, and points multiplier added (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "1"))
+	float BlindFaithDim = 0.5f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float BlindFaithPointsBonus = 0.3f;
+
 	// ---------------- Misses (Endless) ----------------
 
 	/** Separate lives for missed target zones (and wrong presses, and broken hands). Endless only -
@@ -638,13 +737,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
 	float StartSpeed = 85.f;
 
-	/** Hand speed will never exceed this. */
+	/** Hand speed will never exceed this (reached around level 28). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float MaxSpeed = 330.f;
+	float MaxSpeed = 260.f;
 
 	/** Speed is multiplied by this after every successful hit. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
-	float SpeedMultiplier = 1.007f;
+	float SpeedMultiplier = 1.005f;
 
 	/** Half-width of the target zone at the start, in degrees. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Tuning")
@@ -869,6 +968,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float LightsLevel = 1.f;
 
+	/** The cards on offer at the current upgrade pick. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	TArray<ESpinUpgrade> UpgradeOffer;
+
 	/** The button the new-button screen (ESpinState::NewButtonIntro) is introducing. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 NewButtonIndex = 1;
@@ -1009,6 +1112,25 @@ public:
 
 	/** How visible the current zone is, 0..1: 1 normally; in the dark it shows briefly, then fades. */
 	float GetZoneVisibility() const;
+
+	/** The zones' half-width as played (ZoneHalfWidth, widened by Steady Grip). */
+	float GetZoneHalfWidth() const;
+
+	/** How bright the zones are drawn, 0..1 (dimmed by Blind Faith). */
+	float GetZoneBrightness() const;
+
+	// ---------------- Upgrades ----------------
+
+	static const FSpinUpgradeInfo& GetUpgradeInfo(ESpinUpgrade Upgrade);
+
+	/** How many times this run has picked an upgrade. */
+	int32 GetUpgradeStacks(ESpinUpgrade Upgrade) const;
+
+	/** Levels of Steady Grip left (including the current one), or 0. */
+	int32 GetSteadyGripLevelsLeft() const;
+
+	/** Hits left at half points from Debt. */
+	int32 GetDebtHitsLeft() const { return DebtHitsLeft; }
 
 	/** Current Endless level, starting at 1. */
 	int32 GetLevel() const;
@@ -1270,6 +1392,35 @@ private:
 	/** EventTime when the current zone was last shown (placed, or shown again after a pause or the
 	 *  invincibility countdown), for the blackout's brief look at it. */
 	float ZoneShownTime = 0.f;
+
+	// Upgrades
+	/** Deals UpgradeOffer and opens the pick screen. */
+	void OpenUpgradePick();
+	void ApplyUpgrade(ESpinUpgrade Upgrade);
+	void ResetUpgrades();
+	float GetBlackoutPointsMultiplier() const;
+
+	/** Times each upgrade has been picked this run (indexed by ESpinUpgrade). */
+	TArray<int32> UpgradeStacks;
+
+	/** A pick is due but an explanation screen came first: it opens once that's dismissed. */
+	bool bUpgradePending = false;
+
+	/** World time the pick screen opened: picks are ignored for a moment, so a press meant for the
+	 *  hand can't choose a card by accident. */
+	float UpgradePickOpenTime = -1000.f;
+
+	/** The last level of each Steady Grip picked (one entry per pick). */
+	TArray<int32> SteadyGripUntilLevel;
+
+	int32 DebtHitsLeft = 0;
+
+	/** This level's blackout came from Borrowed Time, and the points its hits have earned so far. */
+	bool bBorrowedBlackout = false;
+	int32 BlackoutPointsEarned = 0;
+
+	/** Double zone: the pair's first hit was a PERFECT (for Twin Engine's bonus). */
+	bool bPairFirstPerfect = false;
 
 	UPROPERTY()
 	TObjectPtr<ASpinClock> Clock;

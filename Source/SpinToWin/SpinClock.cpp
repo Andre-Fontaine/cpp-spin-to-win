@@ -1265,18 +1265,18 @@ void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 		SetGroupVisible(SecondZoneSegments, SecondZoneMarks, bShowSecond);
 	}
 
-	if (bShow && !(FMath::IsNearlyEqual(GM.ZoneCenter, LastZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.ZoneHalfWidth, LastZoneHalfWidth, 0.01f)))
+	if (bShow && !(FMath::IsNearlyEqual(GM.ZoneCenter, LastZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.GetZoneHalfWidth(), LastZoneHalfWidth, 0.01f)))
 	{
 		LastZoneCenter = GM.ZoneCenter;
-		LastZoneHalfWidth = GM.ZoneHalfWidth;
-		LayoutZone(ZoneSegments, ZoneMarks, GM.ZoneCenter, GM.ZoneHalfWidth, GM);
+		LastZoneHalfWidth = GM.GetZoneHalfWidth();
+		LayoutZone(ZoneSegments, ZoneMarks, GM.ZoneCenter, GM.GetZoneHalfWidth(), GM);
 	}
 
-	if (bShowSecond && !(FMath::IsNearlyEqual(GM.SecondZoneCenter, LastSecondZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.ZoneHalfWidth, LastSecondZoneHalfWidth, 0.01f)))
+	if (bShowSecond && !(FMath::IsNearlyEqual(GM.SecondZoneCenter, LastSecondZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.GetZoneHalfWidth(), LastSecondZoneHalfWidth, 0.01f)))
 	{
 		LastSecondZoneCenter = GM.SecondZoneCenter;
-		LastSecondZoneHalfWidth = GM.ZoneHalfWidth;
-		LayoutZone(SecondZoneSegments, SecondZoneMarks, GM.SecondZoneCenter, GM.ZoneHalfWidth, GM);
+		LastSecondZoneHalfWidth = GM.GetZoneHalfWidth();
+		LayoutZone(SecondZoneSegments, SecondZoneMarks, GM.SecondZoneCenter, GM.GetZoneHalfWidth(), GM);
 	}
 }
 
@@ -1342,7 +1342,7 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	// A blackout: everything but the hand follows the lights down (see ASpinGameMode::LightsLevel).
 	// The zone keeps its own brightness for its brief look in the dark, then fades on its own.
 	const float Lights = GM.LightsLevel;
-	const float ZoneVisibility = GM.GetZoneVisibility();
+	const float ZoneVisibility = GM.GetZoneVisibility() * GM.GetZoneBrightness(); // Blind Faith dims the zones too
 
 	if (ZoneMID)
 	{
@@ -1359,7 +1359,7 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	if (SecondZoneMID && GM.bHasSecondZone)
 	{
 		const FLinearColor SecondBase = GM.Prompts.IsValidIndex(GM.SecondPromptIndex) ? GM.Prompts[GM.SecondPromptIndex].Color : ZoneBase;
-		SecondZoneMID->SetVectorParameterValue(ColorParam, SecondBase * (NeonMaterial ? ZoneGlow * 0.7f : 0.7f) * Dim);
+		SecondZoneMID->SetVectorParameterValue(ColorParam, SecondBase * (NeonMaterial ? ZoneGlow * 0.7f : 0.7f) * Dim * GM.GetZoneBrightness());
 	}
 
 	// Successful hits flare the rings and the fill light, then fade back (the city does the same,
@@ -1369,10 +1369,9 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 
 	if (OuterRingMID)
 	{
-		// The whole rim glows the colour of whichever button the next zone needs. In the dark it
-		// keeps a faint glow, so the button to press is never hidden.
-		const float RimGlow = (1.f + RingHitPulseBoost * Pulse) * Dim * FMath::Lerp(0.2f, 1.f, Lights);
-		OuterRingMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : ZoneBase * RimGlow);
+		// The whole rim glows the colour of whichever button the next zone needs. It goes dark with
+		// everything else in a blackout - the button has to be remembered too.
+		OuterRingMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : ZoneBase * RingGlow);
 	}
 
 	if (InnerRingMID)

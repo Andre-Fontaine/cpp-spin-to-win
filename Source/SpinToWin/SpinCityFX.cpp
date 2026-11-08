@@ -351,6 +351,7 @@ float ASpinCityFX::GetRevealProgress() const
 	case ESpinState::HighObstacleIntro:
 	case ESpinState::TutorialIntro:
 	case ESpinState::EndlessIntro:
+	case ESpinState::UpgradeSelect:
 		break;
 	default:
 		return -1.f; // a menu
