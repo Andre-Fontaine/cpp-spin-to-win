@@ -66,6 +66,17 @@ struct FSpinProfile
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 JamsFixed = 0;
 
+	/** Lifetime curse stats (mid-run upgrades), which unlock some modifiers and bonuses: curses
+	 *  picked, points they've earned, and the best level reached with at least two of them. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 CursesTaken = 0;
+
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 CursePoints = 0;
+
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 BestCursedLevel = 0;
+
 	/** High posts have been explained to them once already, so the screen doesn't come back. */
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	bool bSeenHighPosts = false;

@@ -56,6 +56,12 @@ struct FObstacleState
 
 	/** A high post: it floats above the dial, so the hand passes under it - unless it's lifted. */
 	bool bHigh = false;
+
+	/** The second (high) post of a Twin Posts pair: passing it means the pair was cleared. */
+	bool bTwin = false;
+
+	/** Ghost Posts: still too far from the hand to be seen. (It's there all the same.) */
+	bool bGhostHidden = false;
 };
 
 /** An obstacle glitching in or out, for the HUD to draw its pixel blocks over. */
@@ -131,7 +137,7 @@ public:
 
 	/** Glitch an obstacle in at this angle / radius on the dial. A high one floats above the dial
 	 *  instead of standing on it (see FObstacleState::bHigh). */
-	void SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh = false);
+	void SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh = false, bool bTwin = false);
 	// AheadDeg = how many degrees ahead of the hand (in its direction of travel) the obstacle is.
 
 	/** Glitch every current obstacle back out. */
@@ -909,6 +915,8 @@ private:
 	float LastZoneCenter = -1000.f;
 	float LastZoneHalfWidth = -1000.f;
 	bool bZonesVisible = true;
+	/** The PERFECT band the grade lines were last laid out for (Sweet Spot can widen it mid-zone). */
+	float LastPerfectFraction = -1.f;
 	float LastSecondZoneCenter = -1000.f;
 	float LastSecondZoneHalfWidth = -1000.f;
 	bool bSecondZoneVisible = true;

@@ -179,7 +179,13 @@ enum class ESpinUnlockStat : uint8
 	BestLevel,
 	ObstaclesCleared,
 	JamsFixed,
-	RunsPlayed
+	RunsPlayed,
+	/** Curses picked, over every run. */
+	CursesTaken,
+	/** Points curses have earned, over every run. */
+	CursePoints,
+	/** Best level reached in a run with at least two curses. */
+	BestCursedLevel
 };
 
 /** Display info and unlock rule for one bonus, see ASpinGameMode::GetBonusInfo. */
@@ -229,18 +235,60 @@ enum class ESpinUpgrade : uint8
 	SteadyGrip,
 	/** Boon: in a blackout, each zone stays visible longer. */
 	Afterglow,
+	/** Boon: the hand slower for a few levels. */
+	Brake,
+	/** Boon: the next combo break is ignored. */
+	ComboSaver,
+	/** Boon: a wider PERFECT band. */
+	SweetSpot,
+	/** Boon: lifting the hand costs far fewer points for a few levels. */
+	SpringHand,
+	/** Boon: no jams for a few levels. */
+	CoolRunning,
+	/** Boon: one more (obstacle) life, now and at most. */
+	Plating,
+	/** Boon: no posts this level. */
+	ClearSkies,
 	/** Gamble: PERFECT hits pay far more, but GOOD hits count as OK. */
 	TightLines,
 	/** Gamble: blackouts come more often and pay more. */
 	LightsOut,
 	/** Gamble: double zones come more often, and a pair of PERFECTs pays a bonus. */
 	TwinEngine,
+	/** Gamble: the combo builds faster, but anything short of PERFECT resets it. */
+	AllIn,
+	/** Gamble: one miss life for a stretch of hits, at double points - then the old ones come back. */
+	GlassHand,
+	/** Gamble: some posts come as a low-then-high pair, paying out when both are cleared. */
+	TwinPosts,
+	/** Gamble: jams take more presses to fix, and each fix pays out. */
+	JamSession,
+	/** Gamble: most posts are high posts, and each one passed under pays out. */
+	HighWire,
+	/** Gamble: this level's points doubled - lose a miss life in it and the level's points are gone. */
+	DoubleOrNothing,
+	/** Gamble: a growing multiplier for every level cleared without losing a miss life. */
+	Momentum,
 	/** Curse: points now, half points on the next hits. */
 	Debt,
 	/** Curse: dimmer zones for a points multiplier. */
 	BlindFaith,
 	/** Curse: the level after the pick is a blackout paying double - but a miss in it costs double what it earned. */
 	BorrowedTime,
+	/** Curse: a miss life given up now, for points. */
+	BloodPact,
+	/** Curse: points now, one fewer miss life at most. */
+	CursedGold,
+	/** Curse: fake zones beside some real ones. */
+	HauntedDial,
+	/** Curse: clearing posts no longer earns lives back. */
+	Drought,
+	/** Curse: the combo is capped low. */
+	GlassCeiling,
+	/** Curse: the hand lifts slowly. */
+	HeavyHand,
+	/** Curse: posts stay invisible until they're close. */
+	GhostPosts,
 	Count UMETA(Hidden)
 };
 
@@ -257,6 +305,8 @@ struct FSpinUpgradeInfo
 	const TCHAR* Name;
 	const TCHAR* Description;
 	ESpinUpgradeKind Kind;
+	/** Points multiplier added for the rest of the run, per stack (the curses' payment). */
+	float PointsBonus = 0.f;
 };
 
 UENUM(BlueprintType)
@@ -672,7 +722,7 @@ public:
 	int32 UpgradeEveryLevels = 5;
 
 	/** Cards offered at each pick. */
-	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1", ClampMax = "9"))
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1", ClampMax = "5"))
 	int32 UpgradeChoices = 3;
 
 	/** Seconds of countdown after a pick before play picks back up. */
@@ -690,6 +740,28 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
 	float AfterglowTime = 1.f;
 
+	/** Brake: the hand this much slower, for this many levels. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "0.5"))
+	float BrakeSlowdown = 0.1f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 BrakeLevels = 3;
+
+	/** Sweet Spot: the PERFECT band this much wider (per stack). It never grows past most of the GOOD band. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float SweetSpotBonus = 0.25f;
+
+	/** Spring Hand: lifting drains points at this share of the usual rate, for this many levels. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "1"))
+	float SpringHandDrain = 0.25f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 SpringHandLevels = 3;
+
+	/** Cool Running: levels without jams. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 CoolRunningLevels = 3;
+
 	/** Tight Lines: PERFECT hits pay 1 + this many times more (per stack). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
 	float TightLinesPerfectBonus = 2.f;
@@ -705,6 +777,42 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
 	float TwinEnginePairBonus = 2.f;
 
+	/** Glass Hand: hits on a single miss life, and the points multiplier added meanwhile (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
+	int32 GlassHandHits = 10;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float GlassHandPointsBonus = 1.f;
+
+	/** Twin Posts: chance (per stack) that a post comes as a pair, the payout (per stack) for clearing
+	 *  both, and the seconds of hand travel between them (time to drop the hand after the first). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "1"))
+	float TwinPostsChance = 0.35f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	int32 TwinPostsPayout = 300;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0.1"))
+	float TwinPostsGapTime = 0.5f;
+
+	/** Jam Session: extra presses per jam, and the payout for each fix (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	int32 JamSessionExtraPresses = 3;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	int32 JamSessionPayout = 300;
+
+	/** High Wire: chance a post is a high post (from any level), and the payout per one passed (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "1"))
+	float HighWireChance = 0.8f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	int32 HighWirePayout = 200;
+
+	/** Momentum: points multiplier added per clean level (per stack). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
+	float MomentumPerLevel = 0.1f;
+
 	/** Debt: points paid out now, and how many following hits score at half (per stack). */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
 	int32 DebtPayout = 1000;
@@ -712,12 +820,30 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "1"))
 	int32 DebtHits = 10;
 
-	/** Blind Faith: zone brightness multiplied by this, and points multiplier added (per stack). */
+	/** Blind Faith: zone brightness multiplied by this (per stack). (Each curse's points bonus is in
+	 *  ASpinGameMode::GetUpgradeInfo, next to its description.) */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "1"))
 	float BlindFaithDim = 0.5f;
 
+	/** Cursed Gold: points paid out now. */
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades")
-	float BlindFaithPointsBonus = 0.3f;
+	int32 CursedGoldPayout = 2000;
+
+	/** Haunted Dial: chance (per stack) a zone comes with a fake beside it. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0", ClampMax = "1"))
+	float HauntedDialChance = 0.35f;
+
+	/** Glass Ceiling: the highest combo multiplier (one lower per extra stack, never below x2). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "2"))
+	int32 GlassCeilingCap = 3;
+
+	/** Heavy Hand: the lift's rise stiffness is multiplied by this (per stack) - lower is slower. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0.05", ClampMax = "1"))
+	float HeavyHandLiftScale = 0.3f;
+
+	/** Ghost Posts: posts show only once the hand is this many seconds of travel away. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Upgrades", meta = (ClampMin = "0.1"))
+	float GhostPostsRevealTime = 0.4f;
 
 	// ---------------- Misses (Endless) ----------------
 
@@ -859,6 +985,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	float ComboLostTime = -1000.f;
 
+	/** World time Combo Saver last caught a combo break, for the HUD. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float ComboSavedTime = -1000.f;
+
 	/** The player's personal bests as they stood when this run started - what the run is chasing. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 BestLevel = 0;
@@ -963,6 +1093,16 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 SecondPromptIndex = 0;
 
+	/** Haunted Dial: a fake zone on the dial (looks real but flickers; pressing in it is a wrong press). */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bHasDecoyZone = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float DecoyZoneCenter = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 DecoyPromptIndex = 0;
+
 	/** How lit the world is, 0..1: 1 normally, flickering and dropping to BlackoutLightLevel during a
 	 *  blackout. The dial (all but the hand) and the city scale their glow by it. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -971,6 +1111,10 @@ public:
 	/** The cards on offer at the current upgrade pick. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	TArray<ESpinUpgrade> UpgradeOffer;
+
+	/** Points this run's curses have earned: their share of every hit, plus their lump sums. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 CursePointsEarned = 0;
 
 	/** The button the new-button screen (ESpinState::NewButtonIntro) is introducing. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
@@ -1126,11 +1270,38 @@ public:
 	/** How many times this run has picked an upgrade. */
 	int32 GetUpgradeStacks(ESpinUpgrade Upgrade) const;
 
-	/** Levels of Steady Grip left (including the current one), or 0. */
-	int32 GetSteadyGripLevelsLeft() const;
+	/** How many picks of a level-limited upgrade (Steady Grip, Brake, ...) are still running. */
+	int32 GetActiveUpgradeWindows(ESpinUpgrade Upgrade) const;
+
+	/** The PERFECT band as played (PerfectFraction, widened by Sweet Spot). */
+	float GetRunPerfectFraction() const;
+
+	/** The hand's speed as played (CurrentSpeed, slowed by Brake). */
+	float GetHandSpeed() const;
 
 	/** Hits left at half points from Debt. */
 	int32 GetDebtHitsLeft() const { return DebtHitsLeft; }
+
+	/** Hits left on Glass Hand's single miss life, or 0. */
+	int32 GetGlassHandHitsLeft() const { return GlassHandHitsLeft; }
+
+	/** Momentum's current points multiplier bonus (0 without it). */
+	float GetMomentumBonus() const;
+
+	/** Multiplier on how fast the lift raises the hand (Heavy Hand slows it). */
+	float GetLiftRiseScale() const;
+
+	/** What the run's curses add to its points multiplier (0 with none). */
+	float GetCursePointsBonus() const;
+
+	/** "BLOOD PACT + DROUGHT x2", or empty with no curses. */
+	FString GetCurseNames() const;
+
+	/** True while posts stay hidden until close (Ghost Posts). */
+	bool HasGhostPosts() const { return !IsTutorial() && GetUpgradeStacks(ESpinUpgrade::GhostPosts) > 0; }
+
+	/** Called by the clock when the hand has passed under a high post. bTwin = the second of a twin pair. */
+	void OnHighObstaclePassed(bool bTwin);
 
 	/** Current Endless level, starting at 1. */
 	int32 GetLevel() const;
@@ -1410,8 +1581,33 @@ private:
 	 *  hand can't choose a card by accident. */
 	float UpgradePickOpenTime = -1000.f;
 
-	/** The last level of each Steady Grip picked (one entry per pick). */
-	TArray<int32> SteadyGripUntilLevel;
+	/** Level-limited upgrades: the last level of each pick, indexed by ESpinUpgrade (one entry per pick). */
+	TArray<TArray<int32>> UpgradeWindows;
+
+	/** How many levels a level-limited upgrade lasts, or 0 for one that lasts the run. */
+	int32 GetUpgradeWindowLevels(ESpinUpgrade Upgrade) const;
+
+	/** Combo breaks Combo Saver will still catch. */
+	int32 ComboSaves = 0;
+
+	/** Glass Hand: hits left on one miss life, and the miss lives to give back after. */
+	int32 GlassHandHitsLeft = 0;
+	int32 GlassHandSavedMissLives = 0;
+
+	/** Double or Nothing: the level it covers (0 = none), whether it's been lost, and what that level has earned. */
+	int32 DoubleOrNothingLevel = 0;
+	bool bDoubleOrNothingBust = false;
+	int32 DoubleOrNothingEarned = 0;
+
+	/** Momentum: clean levels in a row, and whether the current level has cost a miss life. */
+	int32 MomentumLevels = 0;
+	bool bMissLostThisLevel = false;
+
+	/** Pays a flat upgrade bonus straight onto the score, with a notice. */
+	void AwardBonusPoints(int32 Amount, const TCHAR* Label);
+
+	/** Called whenever a miss life is spent (Double or Nothing, Momentum). */
+	void OnMissLifeLost();
 
 	int32 DebtHitsLeft = 0;
 

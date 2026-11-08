@@ -279,13 +279,15 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 
 	// A jammed hand grinds along slowly, easing down when it jams and back up once it's fixed.
 	JamSpeedFactor = FMath::FInterpTo(JamSpeedFactor, JamPhase == EJamPhase::Jammed ? JamSlowdown : 1.f, Dt, 5.f);
-	HandAngle = FMath::Fmod(HandAngle + Direction * CurrentSpeed * JamSpeedFactor * Dt + 360.f, 360.f);
+	HandAngle = FMath::Fmod(HandAngle + Direction * GetHandSpeed() * JamSpeedFactor * Dt + 360.f, 360.f);
 
 	// Endless: a lifted hand costs points for as long as it's up. Fractions carry over between
 	// frames so the drain stays steady at any frame rate.
 	if (!IsTutorial() && Clock && Clock->IsLiftActive())
 	{
-		LiftPointsDebt += LiftPointsPerSecond * Dt;
+		// Each Spring Hand still running cuts the drain again.
+		const float Drain = FMath::Pow(SpringHandDrain, static_cast<float>(GetActiveUpgradeWindows(ESpinUpgrade::SpringHand)));
+		LiftPointsDebt += LiftPointsPerSecond * Drain * Dt;
 		const int32 Whole = FMath::FloorToInt(LiftPointsDebt);
 		LiftPointsDebt -= Whole;
 		const int32 OldPoints = Points;
@@ -552,6 +554,12 @@ void ASpinGameMode::OnObstacleCleared()
 	}
 	++ObstaclesCleared;
 
+	// Drought: posts no longer earn lives back.
+	if (GetUpgradeStacks(ESpinUpgrade::Drought) > 0)
+	{
+		return;
+	}
+
 	// Every few posts cleared earn a life back. Nothing builds up while lives are full.
 	if (Lives >= GetRunMaxLives())
 	{
@@ -600,13 +608,50 @@ float ASpinGameMode::GetZoneHalfWidth() const
 		return ZoneHalfWidth;
 	}
 	// Each Steady Grip still running widens the zones a little more.
-	const int32 Level = GetLevel();
-	int32 Grips = 0;
-	for (const int32 Until : SteadyGripUntilLevel)
+	return ZoneHalfWidth * (1.f + SteadyGripWidthBonus * GetActiveUpgradeWindows(ESpinUpgrade::SteadyGrip));
+}
+
+float ASpinGameMode::GetHandSpeed() const
+{
+	// Each Brake still running slows the hand a little more (never below half speed).
+	const float Slow = BrakeSlowdown * GetActiveUpgradeWindows(ESpinUpgrade::Brake);
+	return CurrentSpeed * FMath::Max(0.5f, 1.f - Slow);
+}
+
+float ASpinGameMode::GetRunPerfectFraction() const
+{
+	// Sweet Spot widens PERFECT, but it never takes over most of GOOD.
+	const float Wider = PerfectFraction * (1.f + SweetSpotBonus * GetUpgradeStacks(ESpinUpgrade::SweetSpot));
+	return FMath::Min(Wider, GoodFraction * 0.9f);
+}
+
+int32 ASpinGameMode::GetUpgradeWindowLevels(ESpinUpgrade Upgrade) const
+{
+	switch (Upgrade)
 	{
-		Grips += Level <= Until ? 1 : 0;
+	case ESpinUpgrade::SteadyGrip:  return SteadyGripLevels;
+	case ESpinUpgrade::Brake:       return BrakeLevels;
+	case ESpinUpgrade::SpringHand:  return SpringHandLevels;
+	case ESpinUpgrade::CoolRunning: return CoolRunningLevels;
+	case ESpinUpgrade::ClearSkies:  return 1;
+	default:                        return 0;
 	}
-	return ZoneHalfWidth * (1.f + SteadyGripWidthBonus * Grips);
+}
+
+int32 ASpinGameMode::GetActiveUpgradeWindows(ESpinUpgrade Upgrade) const
+{
+	const int32 Index = static_cast<int32>(Upgrade);
+	if (IsTutorial() || !UpgradeWindows.IsValidIndex(Index))
+	{
+		return 0;
+	}
+	const int32 Level = GetLevel();
+	int32 Active = 0;
+	for (const int32 Until : UpgradeWindows[Index])
+	{
+		Active += Level <= Until ? 1 : 0;
+	}
+	return Active;
 }
 
 float ASpinGameMode::GetZoneBrightness() const
@@ -614,15 +659,6 @@ float ASpinGameMode::GetZoneBrightness() const
 	return IsTutorial() ? 1.f : FMath::Pow(BlindFaithDim, static_cast<float>(GetUpgradeStacks(ESpinUpgrade::BlindFaith)));
 }
 
-int32 ASpinGameMode::GetSteadyGripLevelsLeft() const
-{
-	int32 Until = 0;
-	for (const int32 Level : SteadyGripUntilLevel)
-	{
-		Until = FMath::Max(Until, Level);
-	}
-	return FMath::Max(0, Until - GetLevel() + 1);
-}
 
 bool ASpinGameMode::IsBlackoutDark() const
 {
@@ -781,7 +817,7 @@ ESpinHitGrade ASpinGameMode::GradeHit() const
 	// 0 = dead centre of the zone, 1 = its very edge.
 	const float Offset = FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) / FMath::Max(0.01f, GetZoneHalfWidth());
 
-	if (Offset <= PerfectFraction)
+	if (Offset <= GetRunPerfectFraction())
 	{
 		return ESpinHitGrade::Perfect;
 	}
@@ -806,15 +842,23 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 
 	LastHitGrade = Grade;
 
-	// PERFECT builds the streak, GOOD holds it, OK breaks it.
+	// PERFECT builds the streak, GOOD holds it, OK breaks it. All In builds it faster, but a GOOD
+	// breaks it too.
+	const int32 AllIn = GetUpgradeStacks(ESpinUpgrade::AllIn);
 	if (Grade == ESpinHitGrade::Perfect)
 	{
 		++PerfectStreak;
-		ComboMultiplier = FMath::Min(MaxMultiplier, 1 + PerfectStreak / FMath::Max(1, PerfectsPerMultiplier));
+		// Glass Ceiling caps it low (lower still with every stack, never below x2).
+		int32 Cap = MaxMultiplier;
+		if (const int32 Ceiling = GetUpgradeStacks(ESpinUpgrade::GlassCeiling))
+		{
+			Cap = FMath::Min(Cap, FMath::Max(2, GlassCeilingCap - (Ceiling - 1)));
+		}
+		ComboMultiplier = FMath::Min(Cap, 1 + PerfectStreak * (1 + AllIn) / FMath::Max(1, PerfectsPerMultiplier));
 		LongestPerfectStreak = FMath::Max(LongestPerfectStreak, PerfectStreak);
 		PeakMultiplier = FMath::Max(PeakMultiplier, ComboMultiplier);
 	}
-	else if (Grade == ESpinHitGrade::Ok)
+	else if (Grade == ESpinHitGrade::Ok || (Grade == ESpinHitGrade::Good && AllIn > 0))
 	{
 		BreakCombo();
 	}
@@ -823,8 +867,21 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 		: (Grade == ESpinHitGrade::Good) ? GoodPoints
 		: OkPoints;
 
-	// Blind Faith adds to the run's multiplier; Debt halves the hits it's still owed.
-	const float UpgradeMultiplier = 1.f + BlindFaithPointsBonus * GetUpgradeStacks(ESpinUpgrade::BlindFaith);
+	// Upgrades that add to the run's multiplier: the curses always, Glass Hand while it lasts, and
+	// Momentum for every clean level. Double or Nothing doubles its level on top.
+	const float CurseBonus = GetCursePointsBonus();
+	float UpgradeMultiplier = 1.f + GetMomentumBonus() + CurseBonus;
+	if (GlassHandHitsLeft > 0)
+	{
+		UpgradeMultiplier += GlassHandPointsBonus * GetUpgradeStacks(ESpinUpgrade::GlassHand);
+	}
+	// The curses' share of this hit, for the game-over screen (worked out before any doubling).
+	const float CurseShare = CurseBonus / UpgradeMultiplier;
+	const bool bDoubleOrNothing = DoubleOrNothingLevel > 0 && GetLevel() == DoubleOrNothingLevel && !bDoubleOrNothingBust;
+	if (bDoubleOrNothing)
+	{
+		UpgradeMultiplier *= 2.f;
+	}
 	LastHitPoints = FMath::RoundToInt(BasePoints * PointsScale * RunPointsMultiplier * UpgradeMultiplier) * ComboMultiplier;
 	if (DebtHitsLeft > 0)
 	{
@@ -834,6 +891,19 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 	if (IsBlackoutDark())
 	{
 		BlackoutPointsEarned += LastHitPoints;
+	}
+	if (bDoubleOrNothing)
+	{
+		DoubleOrNothingEarned += LastHitPoints;
+	}
+	CursePointsEarned += FMath::RoundToInt(LastHitPoints * CurseShare);
+
+	// Glass Hand counts down its hits, then gives the miss lives back.
+	if (GlassHandHitsLeft > 0 && --GlassHandHitsLeft == 0)
+	{
+		MissLives = FMath::Max(MissLives, FMath::Min(GlassHandSavedMissLives, GetRunMaxMissLives()));
+		MissLifeGainedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+		ShowNotice(TEXT("GLASS HAND over - your misses are back"));
 	}
 	const int32 OldPoints = Points;
 	Points += LastHitPoints;
@@ -847,6 +917,14 @@ void ASpinGameMode::ScoreHit(ESpinHitGrade Grade, float PointsScale)
 
 void ASpinGameMode::BreakCombo()
 {
+	// Combo Saver catches the break - as long as there's a streak to lose.
+	if (ComboSaves > 0 && PerfectStreak > 0)
+	{
+		--ComboSaves;
+		ComboSavedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+		return;
+	}
+
 	if (ComboMultiplier > 1 && GetWorld())
 	{
 		ComboLostTime = GetWorld()->GetTimeSeconds();
@@ -927,6 +1005,19 @@ void ASpinGameMode::RecordRun()
 		FSpinProfile& Profile = SaveData->Profiles[ProfileIndex];
 		Profile.ObstaclesCleared += ObstaclesCleared;
 		Profile.JamsFixed += JamsFixed;
+
+		// Curse stats, which unlock some modifiers and bonuses.
+		int32 Curses = 0;
+		for (int32 i = 0; i < UpgradeStacks.Num(); ++i)
+		{
+			Curses += GetUpgradeInfo(static_cast<ESpinUpgrade>(i)).Kind == ESpinUpgradeKind::Curse ? UpgradeStacks[i] : 0;
+		}
+		Profile.CursesTaken += Curses;
+		Profile.CursePoints += CursePointsEarned;
+		if (Curses >= 2)
+		{
+			Profile.BestCursedLevel = FMath::Max(Profile.BestCursedLevel, Run.Level);
+		}
 		if (bDailyRun)
 		{
 			++Profile.RunsPlayed;
@@ -963,10 +1054,10 @@ const FSpinModifierInfo& ASpinGameMode::GetModifierInfo(ESpinModifier Modifier)
 	static const FSpinModifierInfo Infos[] =
 	{
 		{ TEXT("FAST HAND"),  TEXT("The hand starts 35% faster."),                      1.3f,  TEXT("Reach level 5"),  ESpinUnlockStat::BestLevel, 5 },
-		{ TEXT("TINY ZONES"), TEXT("Target zones are 30% narrower."),                  1.5f,  TEXT("Reach level 12"), ESpinUnlockStat::BestLevel, 12 },
+		{ TEXT("TINY ZONES"), TEXT("Target zones are 30% narrower."),                  1.5f,  TEXT("Take 10 curses"), ESpinUnlockStat::CursesTaken, 10 },
 		{ TEXT("WILD SPIN"),  TEXT("The hand only sometimes reverses after a hit."),    1.25f, TEXT("Reach level 8"),  ESpinUnlockStat::BestLevel, 8 },
 		{ TEXT("EARLY JAMS"), TEXT("Jams from level 1, and half again as often."),      1.3f,  TEXT("Fix 15 jams"),    ESpinUnlockStat::JamsFixed, 15 },
-		{ TEXT("ONE LIFE"),   TEXT("One life and one miss: any mistake ends the run."), 2.f,   TEXT("Reach level 20"), ESpinUnlockStat::BestLevel, 20 },
+		{ TEXT("ONE LIFE"),   TEXT("One life and one miss: any mistake ends the run."), 2.f,   TEXT("Reach level 15 with 2 curses"), ESpinUnlockStat::BestCursedLevel, 15 },
 	};
 	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinModifier::Count), "One entry per modifier");
 	return Infos[FMath::Clamp(static_cast<int32>(Modifier), 0, static_cast<int32>(ESpinModifier::Count) - 1)];
@@ -1011,6 +1102,9 @@ static int32 GetProfileStat(const FSpinProfile& Profile, ESpinUnlockStat Stat)
 	case ESpinUnlockStat::ObstaclesCleared: return Profile.ObstaclesCleared;
 	case ESpinUnlockStat::JamsFixed:        return Profile.JamsFixed;
 	case ESpinUnlockStat::RunsPlayed:       return Profile.RunsPlayed;
+	case ESpinUnlockStat::CursesTaken:      return Profile.CursesTaken;
+	case ESpinUnlockStat::CursePoints:      return Profile.CursePoints;
+	case ESpinUnlockStat::BestCursedLevel:  return Profile.BestCursedLevel;
 	default:                                return 0;
 	}
 }
@@ -1120,7 +1214,8 @@ int32 ASpinGameMode::GetDailyBest() const
 
 int32 ASpinGameMode::GetRunMaxLives() const
 {
-	return HasModifier(ESpinModifier::OneLife) ? 1 : MaxLives;
+	// Plating adds to the most there can be (and ONE LIFE still means one - plus any plating).
+	return (HasModifier(ESpinModifier::OneLife) ? 1 : MaxLives) + GetUpgradeStacks(ESpinUpgrade::Plating);
 }
 
 int32 ASpinGameMode::GetRunMaxMissLives() const
@@ -1130,7 +1225,8 @@ int32 ASpinGameMode::GetRunMaxMissLives() const
 	{
 		return 1;
 	}
-	return MaxMissLives + (HasBonus(ESpinBonus::ExtraMisses) ? 2 : 0);
+	// Cursed Gold takes one off the most there can be (never below one).
+	return FMath::Max(1, MaxMissLives + (HasBonus(ESpinBonus::ExtraMisses) ? 2 : 0) - GetUpgradeStacks(ESpinUpgrade::CursedGold));
 }
 
 float ASpinGameMode::GetRunStartSpeed() const
@@ -1165,7 +1261,9 @@ float ASpinGameMode::GetRunJamChance() const
 
 int32 ASpinGameMode::GetRunJamPressesRequired() const
 {
-	return FMath::Max(1, JamPressesRequired - (HasBonus(ESpinBonus::SteadyHands) ? 2 : 0));
+	// Jam Session makes every fix a longer mash.
+	return FMath::Max(1, JamPressesRequired - (HasBonus(ESpinBonus::SteadyHands) ? 2 : 0)
+		+ JamSessionExtraPresses * GetUpgradeStacks(ESpinUpgrade::JamSession));
 }
 
 float ASpinGameMode::GetRunJamTimeLimit() const
@@ -1196,7 +1294,7 @@ const FSpinBonusInfo& ASpinGameMode::GetBonusInfo(ESpinBonus Bonus)
 		{ TEXT("EXTRA MISSES"), TEXT("Two more miss lives: five in all."),                     TEXT("Reach level 15"),     ESpinUnlockStat::BestLevel,        15 },
 		{ TEXT("SECOND WIND"),  TEXT("Your first obstacle hit each run doesn't cost a life."), TEXT("Clear 50 obstacles"), ESpinUnlockStat::ObstaclesCleared, 50 },
 		{ TEXT("STEADY HANDS"), TEXT("Jams take 2 fewer presses, with half again the time."),  TEXT("Fix 25 jams"),        ESpinUnlockStat::JamsFixed,        25 },
-		{ TEXT("BREATHER"),     TEXT("Invincibility after a miss lasts 2 seconds longer."),    TEXT("Play 25 runs"),       ESpinUnlockStat::RunsPlayed,       25 },
+		{ TEXT("BREATHER"),     TEXT("Invincibility after a miss lasts 2 seconds longer."),    TEXT("Earn 25,000 points from curses"), ESpinUnlockStat::CursePoints, 25000 },
 		{ TEXT("EARLY WARNING"), TEXT("Jam sparks last 50% longer before the hand jams."),     TEXT("Fix 10 jams"),        ESpinUnlockStat::JamsFixed,        10 },
 	};
 	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinBonus::Count), "One entry per bonus");
@@ -1486,6 +1584,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	RunBonuses = bDaily ? 0 : GetEquippedBonuses();
 	bSecondWindUsed = false;
 	NewUnlocks.Reset();
+	ResetUpgrades(); // before anything reads them (Plating raises the most lives)
 	RunSeed = bDaily ? static_cast<int32>(HashCombine(static_cast<uint32>(RunDayKey), 0x5A17u)) : FMath::Rand();
 	RunRandom.Initialize(RunSeed);
 
@@ -1551,7 +1650,6 @@ void ASpinGameMode::StartGame(bool bDaily)
 	bTutorialObstacleHit = false;
 	LiftPointsDebt = 0.f;
 	ResetJam();
-	ResetUpgrades();
 	SetLevelEvent(ESpinLevelEvent::None);
 	PlaceNextZone();
 }
@@ -1688,6 +1786,16 @@ void ASpinGameMode::OnHit()
 		SetLevelEvent(bPauseScreen ? ESpinLevelEvent::None : RollLevelEvent(NewLevel, LevelEvent));
 	}
 
+	// Momentum: a level cleared without losing a miss life adds to it.
+	if (NewLevel > OldLevel)
+	{
+		if (!bMissLostThisLevel && GetUpgradeStacks(ESpinUpgrade::Momentum) > 0)
+		{
+			++MomentumLevels;
+		}
+		bMissLostThisLevel = false;
+	}
+
 	// Every few levels of a normal run, a pick of upgrades (after any explanation screen).
 	const bool bUpgradeDue = !bDailyRun && UpgradeEveryLevels > 0 && NewLevel / UpgradeEveryLevels > OldLevel / UpgradeEveryLevels;
 
@@ -1725,7 +1833,7 @@ void ASpinGameMode::OnHit()
 	PlaceNextZone(!bPauseScreen);
 
 	// Sometimes the hand starts to overheat.
-	if (!bPauseScreen && !bUpgradeDue && JamPhase == EJamPhase::None
+	if (!bPauseScreen && !bUpgradeDue && JamPhase == EJamPhase::None && GetActiveUpgradeWindows(ESpinUpgrade::CoolRunning) == 0
 		&& GetLevel() >= GetRunJamStartLevel() && RunRandom.FRand() < GetRunJamChance())
 	{
 		StartJamSparks();
@@ -1888,6 +1996,7 @@ void ASpinGameMode::Fail(ESpinMistake Mistake)
 		{
 			MissLifeLostTime = GetWorld()->GetTimeSeconds();
 		}
+		OnMissLifeLost();
 
 		if (MissLives <= 0)
 		{
@@ -2779,6 +2888,10 @@ void ASpinGameMode::FixJam()
 	if (!IsTutorial())
 	{
 		++JamsFixed;
+		if (const int32 Session = GetUpgradeStacks(ESpinUpgrade::JamSession))
+		{
+			AwardBonusPoints(JamSessionPayout * Session, TEXT("JAM SESSION"));
+		}
 	}
 	JamPhase = EJamPhase::None;
 	JamTimer = 0.f;
@@ -2849,9 +2962,9 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 	ZoneShownTime = EventTime;
 	bHasSecondZone = false;
 
-	// A double-zone level keeps posts out of the way: the pair is the challenge.
+	// A double-zone level keeps posts out of the way: the pair is the challenge. Clear Skies does too.
 	const bool bDouble = !IsTutorial() && LevelEvent == ESpinLevelEvent::DoubleZone;
-	if (bDouble)
+	if (bDouble || GetActiveUpgradeWindows(ESpinUpgrade::ClearSkies) > 0)
 	{
 		bAllowObstacle = false;
 	}
@@ -2890,24 +3003,62 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 		const float MaxOffset = 360.f - HW - 12.f;
 
 		// The obstacle sits far enough ahead that there is time to see it and lift the hand...
-		float ObstacleDist = FMath::Max(CurrentSpeed * ObstacleWarningTime, MinObstacleDistance) + RunRandom.FRandRange(0.f, 15.f);
+		float ObstacleDist = FMath::Max(GetHandSpeed() * ObstacleWarningTime, MinObstacleDistance) + RunRandom.FRandRange(0.f, 15.f);
 		ObstacleDist = FMath::Min(ObstacleDist, MaxOffset - ObstacleClearGap - HW);
 
+		// Twin Posts: sometimes a low post with a high one right behind it - lift, then drop straight
+		// away. Only when the pair (and the zone after it) fits on the dial.
+		const int32 TwinStacks = IsTutorial() ? 0 : GetUpgradeStacks(ESpinUpgrade::TwinPosts);
+		const float TwinGap = FMath::Max(GetHandSpeed() * TwinPostsGapTime, 25.f) + 10.f;
+		const bool bTwin = TwinStacks > 0 && ObstacleDist + TwinGap + ObstacleClearGap + HW <= MaxOffset
+			&& RunRandom.FRand() < FMath::Min(0.9f, TwinPostsChance * TwinStacks);
+		const float LastPostDist = bTwin ? ObstacleDist + TwinGap : ObstacleDist;
+
 		// ...and the zone sits beyond it, with a gap after it.
-		Offset = FMath::Clamp(FMath::Max(Offset, ObstacleDist + ObstacleClearGap + HW), MinZoneOffset, MaxOffset);
+		Offset = FMath::Clamp(FMath::Max(Offset, LastPostDist + ObstacleClearGap + HW), MinZoneOffset, MaxOffset);
 
 		const float Radius = RunRandom.FRandRange(ObstacleMinRadiusFraction, ObstacleMaxRadiusFraction);
-		// The roll happens either way, so a forced one doesn't change the daily's sequence.
-		bool bHigh = false;
-		if (!IsTutorial() && GetLevel() >= HighObstacleStartLevel)
+		if (bTwin)
 		{
-			bHigh = RunRandom.FRand() < HighObstacleChance || bForceHighPost;
-			bForceHighPost = false;
+			Clock->SpawnObstacle(HandAngle + Direction * ObstacleDist, Radius, ObstacleDist, false);
+			Clock->SpawnObstacle(HandAngle + Direction * LastPostDist, Radius, LastPostDist, true, true);
 		}
-		Clock->SpawnObstacle(HandAngle + Direction * ObstacleDist, Radius, ObstacleDist, bHigh);
+		else
+		{
+			// The roll happens either way, so a forced one doesn't change the daily's sequence. High Wire
+			// brings high posts in from any level, and makes most posts high.
+			const bool bHighWire = !IsTutorial() && GetUpgradeStacks(ESpinUpgrade::HighWire) > 0;
+			bool bHigh = false;
+			if (!IsTutorial() && (GetLevel() >= HighObstacleStartLevel || bHighWire))
+			{
+				bHigh = RunRandom.FRand() < (bHighWire ? FMath::Max(HighWireChance, HighObstacleChance) : HighObstacleChance) || bForceHighPost;
+				bForceHighPost = false;
+			}
+			Clock->SpawnObstacle(HandAngle + Direction * ObstacleDist, Radius, ObstacleDist, bHigh);
+		}
 	}
 
 	ZoneCenter = FMath::Fmod(HandAngle + Direction * Offset + 360.f, 360.f);
+
+	// Haunted Dial: sometimes a fake zone too, anywhere clear of the real one (a pair already uses
+	// the second zone, so none on double-zone levels). It's only a look - a press in it is simply
+	// a press outside the real zone.
+	bHasDecoyZone = false;
+	const int32 Haunted = IsTutorial() ? 0 : GetUpgradeStacks(ESpinUpgrade::HauntedDial);
+	if (Haunted > 0 && !bDouble && RunRandom.FRand() < FMath::Min(0.8f, HauntedDialChance * Haunted))
+	{
+		for (int32 Try = 0; Try < 8 && !bHasDecoyZone; ++Try)
+		{
+			const float DecoyOffset = RunRandom.FRandRange(MinZoneOffset * 0.5f, 360.f - HW - 12.f);
+			const float Center = FMath::Fmod(HandAngle + Direction * DecoyOffset + 360.f, 360.f);
+			if (FMath::Abs(FMath::FindDeltaAngleDegrees(Center, ZoneCenter)) >= HW * 2.f + 15.f)
+			{
+				bHasDecoyZone = true;
+				DecoyZoneCenter = Center;
+				DecoyPromptIndex = RunRandom.RandRange(0, GetNumActiveButtons() - 1);
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2947,6 +3098,7 @@ void ASpinGameMode::SetLevelEvent(ESpinLevelEvent Event)
 	ZoneShownTime = 0.f;
 	bBlackoutBroken = false;
 	bHasSecondZone = false;
+	bHasDecoyZone = false;
 	bPairFirstPerfect = false;
 	bBorrowedBlackout = false;
 	BlackoutPointsEarned = 0;
@@ -2970,12 +3122,33 @@ const FSpinUpgradeInfo& ASpinGameMode::GetUpgradeInfo(ESpinUpgrade Upgrade)
 		{ TEXT("PATCH JOB"),     TEXT("One miss life back."),                                                ESpinUpgradeKind::Boon },
 		{ TEXT("STEADY GRIP"),   TEXT("Zones 10% wider for the next 3 levels."),                             ESpinUpgradeKind::Boon },
 		{ TEXT("AFTERGLOW"),     TEXT("In a blackout, each zone stays visible 1 second longer."),           ESpinUpgradeKind::Boon },
+		{ TEXT("BRAKE"),         TEXT("The hand is 10% slower for the next 3 levels."),                     ESpinUpgradeKind::Boon },
+		{ TEXT("COMBO SAVER"),   TEXT("Your next combo break is ignored."),                                 ESpinUpgradeKind::Boon },
+		{ TEXT("SWEET SPOT"),    TEXT("The PERFECT band is 25% wider."),                                    ESpinUpgradeKind::Boon },
+		{ TEXT("SPRING HAND"),   TEXT("Lifting the hand costs a quarter of the points for the next 3 levels."), ESpinUpgradeKind::Boon },
+		{ TEXT("COOL RUNNING"),  TEXT("No jams for the next 3 levels."),                                    ESpinUpgradeKind::Boon },
+		{ TEXT("PLATING"),       TEXT("+1 life now, and +1 to your most lives."),                           ESpinUpgradeKind::Boon },
+		{ TEXT("CLEAR SKIES"),   TEXT("No posts this level."),                                              ESpinUpgradeKind::Boon },
 		{ TEXT("TIGHT LINES"),   TEXT("PERFECT hits pay 3x - but GOOD hits count as OK."),                   ESpinUpgradeKind::Gamble },
 		{ TEXT("LIGHTS OUT"),    TEXT("Blackouts come twice as often and pay +1x."),                        ESpinUpgradeKind::Gamble },
 		{ TEXT("TWIN ENGINE"),   TEXT("Double zones come twice as often. Two PERFECTs on a pair pay 3x."),  ESpinUpgradeKind::Gamble },
+		{ TEXT("ALL IN"),        TEXT("Your combo builds twice as fast - but anything short of PERFECT resets it."), ESpinUpgradeKind::Gamble },
+		{ TEXT("GLASS HAND"),    TEXT("Double points for 10 hits - on a single miss life. Your misses come back after."), ESpinUpgradeKind::Gamble },
+		{ TEXT("TWIN POSTS"),    TEXT("Some posts come as a pair: low, then high. Lift, then drop - clear both for 300."), ESpinUpgradeKind::Gamble },
+		{ TEXT("JAM SESSION"),   TEXT("Jams take 3 more presses to fix - but each fix pays 300."),          ESpinUpgradeKind::Gamble },
+		{ TEXT("HIGH WIRE"),     TEXT("Most posts are high posts (don't lift!). Each one you pass under pays 200."), ESpinUpgradeKind::Gamble },
+		{ TEXT("DOUBLE OR NOTHING"), TEXT("This level's points are doubled - lose a miss life in it and you lose them all."), ESpinUpgradeKind::Gamble },
+		{ TEXT("MOMENTUM"),      TEXT("+0.1x points for every level you clear without losing a miss life. Losing one resets it."), ESpinUpgradeKind::Gamble },
 		{ TEXT("DEBT"),          TEXT("+1000 points now - but your next 10 hits score half."),              ESpinUpgradeKind::Curse },
-		{ TEXT("BLIND FAITH"),   TEXT("Zones are 50% dimmer for the rest of the run. +0.3x points."),       ESpinUpgradeKind::Curse },
+		{ TEXT("BLIND FAITH"),   TEXT("Zones are 50% dimmer for the rest of the run. +0.3x points."),       ESpinUpgradeKind::Curse, 0.3f },
 		{ TEXT("BORROWED TIME"), TEXT("This level is a blackout paying double - but a miss in the dark costs twice what it earned."), ESpinUpgradeKind::Curse },
+		{ TEXT("BLOOD PACT"),    TEXT("Lose a miss life now. +0.5x points for the rest of the run."),       ESpinUpgradeKind::Curse, 0.5f },
+		{ TEXT("CURSED GOLD"),   TEXT("+2000 points now - but one fewer miss life at most, for the rest of the run."), ESpinUpgradeKind::Curse },
+		{ TEXT("HAUNTED DIAL"),  TEXT("Fake zones appear beside some real ones - watch for the flicker. +0.4x points."), ESpinUpgradeKind::Curse, 0.4f },
+		{ TEXT("DROUGHT"),       TEXT("Clearing posts no longer earns lives back. +0.4x points."),          ESpinUpgradeKind::Curse, 0.4f },
+		{ TEXT("GLASS CEILING"), TEXT("Your combo can't go above x3. +0.5x points."),                       ESpinUpgradeKind::Curse, 0.5f },
+		{ TEXT("HEAVY HAND"),    TEXT("The hand lifts much slower - lift earlier for posts. +0.3x points."), ESpinUpgradeKind::Curse, 0.3f },
+		{ TEXT("GHOST POSTS"),   TEXT("Posts stay invisible until they're close. +0.3x points."),           ESpinUpgradeKind::Curse, 0.3f },
 	};
 	static_assert(UE_ARRAY_COUNT(Infos) == static_cast<int32>(ESpinUpgrade::Count), "One entry per upgrade");
 	return Infos[FMath::Clamp(static_cast<int32>(Upgrade), 0, static_cast<int32>(ESpinUpgrade::Count) - 1)];
@@ -2992,8 +3165,98 @@ void ASpinGameMode::ResetUpgrades()
 	UpgradeStacks.Init(0, static_cast<int32>(ESpinUpgrade::Count));
 	UpgradeOffer.Reset();
 	bUpgradePending = false;
-	SteadyGripUntilLevel.Reset();
+	UpgradeWindows.Reset();
+	UpgradeWindows.SetNum(static_cast<int32>(ESpinUpgrade::Count));
 	DebtHitsLeft = 0;
+	ComboSaves = 0;
+	ComboSavedTime = -1000.f;
+	GlassHandHitsLeft = 0;
+	GlassHandSavedMissLives = 0;
+	DoubleOrNothingLevel = 0;
+	bDoubleOrNothingBust = false;
+	DoubleOrNothingEarned = 0;
+	MomentumLevels = 0;
+	bMissLostThisLevel = false;
+	CursePointsEarned = 0;
+}
+
+float ASpinGameMode::GetCursePointsBonus() const
+{
+	float Bonus = 0.f;
+	for (int32 i = 0; i < UpgradeStacks.Num(); ++i)
+	{
+		Bonus += GetUpgradeInfo(static_cast<ESpinUpgrade>(i)).PointsBonus * UpgradeStacks[i];
+	}
+	return Bonus;
+}
+
+FString ASpinGameMode::GetCurseNames() const
+{
+	TArray<FString> Names;
+	for (int32 i = 0; i < UpgradeStacks.Num(); ++i)
+	{
+		const FSpinUpgradeInfo& Info = GetUpgradeInfo(static_cast<ESpinUpgrade>(i));
+		if (Info.Kind == ESpinUpgradeKind::Curse && UpgradeStacks[i] > 0)
+		{
+			Names.Add(UpgradeStacks[i] > 1 ? FString::Printf(TEXT("%s x%d"), Info.Name, UpgradeStacks[i]) : FString(Info.Name));
+		}
+	}
+	return FString::Join(Names, TEXT(" + "));
+}
+
+float ASpinGameMode::GetLiftRiseScale() const
+{
+	return IsTutorial() ? 1.f : FMath::Max(0.05f, FMath::Pow(HeavyHandLiftScale, static_cast<float>(GetUpgradeStacks(ESpinUpgrade::HeavyHand))));
+}
+
+float ASpinGameMode::GetMomentumBonus() const
+{
+	return MomentumPerLevel * GetUpgradeStacks(ESpinUpgrade::Momentum) * MomentumLevels;
+}
+
+void ASpinGameMode::AwardBonusPoints(int32 Amount, const TCHAR* Label)
+{
+	if (Amount <= 0)
+	{
+		return;
+	}
+	Points += Amount;
+	ShowNotice(FString::Printf(TEXT("%s  +%d"), Label, Amount));
+}
+
+void ASpinGameMode::OnHighObstaclePassed(bool bTwin)
+{
+	if (State != ESpinState::Playing || IsTutorial())
+	{
+		return;
+	}
+	// A twin pair is only cleared once its high post is behind the hand (a hit on either ends it).
+	if (bTwin)
+	{
+		AwardBonusPoints(TwinPostsPayout * GetUpgradeStacks(ESpinUpgrade::TwinPosts), TEXT("TWIN POSTS"));
+	}
+	else if (const int32 Wire = GetUpgradeStacks(ESpinUpgrade::HighWire))
+	{
+		AwardBonusPoints(HighWirePayout * Wire, TEXT("HIGH WIRE"));
+	}
+}
+
+void ASpinGameMode::OnMissLifeLost()
+{
+	bMissLostThisLevel = true;
+
+	// Momentum starts over.
+	MomentumLevels = 0;
+
+	// Double or Nothing: losing a miss life in its level takes back everything that level earned.
+	if (DoubleOrNothingLevel > 0 && GetLevel() == DoubleOrNothingLevel && !bDoubleOrNothingBust)
+	{
+		bDoubleOrNothingBust = true;
+		const int32 Lost = FMath::Min(Points, DoubleOrNothingEarned);
+		Points -= Lost;
+		DoubleOrNothingEarned = 0;
+		ShowNotice(FString::Printf(TEXT("DOUBLE OR NOTHING - lost %d points"), Lost));
+	}
 }
 
 void ASpinGameMode::OpenUpgradePick()
@@ -3008,6 +3271,10 @@ void ASpinGameMode::OpenUpgradePick()
 		if (Upgrade == ESpinUpgrade::PatchJob && MissLives >= GetRunMaxMissLives())
 		{
 			continue; // nothing to patch
+		}
+		if ((Upgrade == ESpinUpgrade::BloodPact && MissLives <= 1) || (Upgrade == ESpinUpgrade::CursedGold && GetRunMaxMissLives() <= 1))
+		{
+			continue; // nothing left to give up
 		}
 		Pool.Add(Upgrade);
 	}
@@ -3036,6 +3303,12 @@ void ASpinGameMode::ApplyUpgrade(ESpinUpgrade Upgrade)
 	}
 	++UpgradeStacks[Index];
 
+	// Level-limited ones run from the level being started.
+	if (const int32 Levels = GetUpgradeWindowLevels(Upgrade); Levels > 0 && UpgradeWindows.IsValidIndex(Index))
+	{
+		UpgradeWindows[Index].Add(GetLevel() + Levels - 1);
+	}
+
 	switch (Upgrade)
 	{
 	case ESpinUpgrade::PatchJob:
@@ -3045,11 +3318,55 @@ void ASpinGameMode::ApplyUpgrade(ESpinUpgrade Upgrade)
 			MissLifeGainedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
 		}
 		break;
-	case ESpinUpgrade::SteadyGrip:
-		SteadyGripUntilLevel.Add(GetLevel() + SteadyGripLevels - 1);
+	case ESpinUpgrade::ComboSaver:
+		++ComboSaves;
+		break;
+	case ESpinUpgrade::GlassHand:
+		// Down to one miss life for a while; the rest come back when it's over (see ScoreHit).
+		if (GlassHandHitsLeft == 0)
+		{
+			GlassHandSavedMissLives = MissLives;
+		}
+		GlassHandHitsLeft += GlassHandHits;
+		MissLives = FMath::Min(MissLives, 1);
+		break;
+	case ESpinUpgrade::DoubleOrNothing:
+		DoubleOrNothingLevel = GetLevel();
+		bDoubleOrNothingBust = false;
+		DoubleOrNothingEarned = 0;
+		break;
+	case ESpinUpgrade::BloodPact:
+		// Given up, not lost to a mistake - so Momentum and Double or Nothing don't count it.
+		if (MissLives > 1)
+		{
+			--MissLives;
+			MissLifeLostTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+		}
+		break;
+	case ESpinUpgrade::CursedGold:
+		Points += CursedGoldPayout;
+		CursePointsEarned += CursedGoldPayout;
+		MissLives = FMath::Min(MissLives, GetRunMaxMissLives()); // the most just went down by one
+		break;
+	case ESpinUpgrade::Plating:
+		++Lives; // the most went up by one too (see GetRunMaxLives)
+		LifeGainedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+		break;
+	case ESpinUpgrade::CoolRunning:
+		if (JamPhase == EJamPhase::Sparking)
+		{
+			ResetJam(); // a jam that was about to happen doesn't
+		}
+		break;
+	case ESpinUpgrade::ClearSkies:
+		if (Clock)
+		{
+			Clock->RetireObstacles(); // the post already placed for this zone goes too
+		}
 		break;
 	case ESpinUpgrade::Debt:
 		Points += DebtPayout;
+		CursePointsEarned += DebtPayout;
 		DebtHitsLeft += DebtHits;
 		break;
 	case ESpinUpgrade::BorrowedTime:

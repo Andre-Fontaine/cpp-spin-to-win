@@ -1955,10 +1955,14 @@ void ASpinHUD::DrawZoneLabel(const ASpinGameMode& GM)
 		DrawCapAt(GM.ActivePromptIndex, Clock->GetZoneWorldLocation(0.5f), GM.IsHandInZone());
 	}
 
-	// A pair's second zone carries its own cap.
+	// A pair's second zone carries its own cap - and so does Haunted Dial's fake, to sell it.
 	if (GM.bHasSecondZone && GM.Prompts.IsValidIndex(GM.SecondPromptIndex))
 	{
 		DrawCapAt(GM.SecondPromptIndex, Clock->GetDialWorldLocation(GM.SecondZoneCenter, 0.5f), false);
+	}
+	else if (GM.bHasDecoyZone && GM.GetZoneVisibility() >= 0.5f && GM.Prompts.IsValidIndex(GM.DecoyPromptIndex))
+	{
+		DrawCapAt(GM.DecoyPromptIndex, Clock->GetDialWorldLocation(GM.DecoyZoneCenter, 0.5f), false);
 	}
 }
 
@@ -1990,8 +1994,14 @@ void ASpinHUD::DrawRunModule(const ASpinGameMode& GM, float X, float Y)
 	{
 		Header += TEXT("   +BONUS");
 	}
-	DrawLabel(Header, X + P, HeaderY, TinySize, GM.RunModifiers != 0 ? Purple : TextDim, ESpinTextAlign::Left, true);
+	const float HeaderW = DrawLabel(Header, X + P, HeaderY, TinySize, GM.RunModifiers != 0 ? Purple : TextDim, ESpinTextAlign::Left, true);
 	DrawLabel(GM.GetPlayerName(), X + W - P, HeaderY, TinySize, Cyan, ESpinTextAlign::Right, true);
+
+	// What the run's curses are paying, so taking one visibly counts for something.
+	if (const float Curse = GM.GetCursePointsBonus(); Curse > 0.f)
+	{
+		DrawLabel(TEXT("   CURSED ") + FormatMultiplier(1.f + Curse), X + P + HeaderW, HeaderY, TinySize, Magenta, ESpinTextAlign::Left, true);
+	}
 
 	// Points, with the combo multiplier beside them: "how much" and "how fast it's growing" at one glance.
 	DrawNeonText(FormatPoints(GM.Points), X + P, ScoreY, TitleSize, TextMain, Gold, 0.12f, ESpinTextAlign::Left);
@@ -2206,6 +2216,7 @@ void ASpinHUD::DrawHealthColumns(const ASpinGameMode& GM)
 	{
 		// How close the next life is: posts cleared out of the ObstaclesPerLife needed.
 		const FString LivesSub = GM.IsTutorial() ? FString(TEXT("PRACTICE"))
+			: GM.GetUpgradeStacks(ESpinUpgrade::Drought) > 0 ? FString(TEXT("DROUGHT"))
 			: GM.Lives >= GM.GetRunMaxLives() ? FString(TEXT("FULL"))
 			: FString::Printf(TEXT("%d/%d TO +1"), GM.ObstacleLifeProgress, GM.ObstaclesPerLife);
 		DrawColumn(DialLeft - RimGap - W, TEXT("LIVES"), *LivesSub,
@@ -2404,6 +2415,12 @@ void ASpinHUD::DrawHitPopup(const ASpinGameMode& GM, float CenterX, float Y)
 				: FString::Printf(TEXT("+%s"), *FormatPoints(GM.LastHitPoints));
 			DrawLabel(PointsText, CenterX, Y + LineH(Size) - Rise, 16.f, Fade(TextMain, Alpha), ESpinTextAlign::Center, true);
 		}
+	}
+
+	const float SinceComboSaved = Now - GM.ComboSavedTime;
+	if (!GM.IsTutorial() && SinceComboSaved >= 0.f && SinceComboSaved < 1.f)
+	{
+		DrawNeonText(TEXT("COMBO SAVED"), CenterX, Y + U(80.f), 16.f, Fade(Green, 1.f - SinceComboSaved), Green, 0.25f, ESpinTextAlign::Center);
 	}
 
 	const float SinceComboLost = Now - GM.ComboLostTime;
@@ -3188,6 +3205,12 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	const FString Bonuses = GM.RunBonuses != 0 ? FString::Printf(TEXT("BONUSES:  %s"), *ASpinGameMode::GetBonusNames(GM.RunBonuses)) : FString();
 	const float BonusesH = Bonuses.IsEmpty() ? 0.f : LineH(SmallSize) + U(4.f);
 
+	// The curses taken, and what they paid.
+	const FString CurseNames = GM.GetCurseNames();
+	const FString Curses = CurseNames.IsEmpty() ? FString()
+		: FString::Printf(TEXT("CURSES:  %s  -  +%s POINTS"), *CurseNames, *FormatPoints(GM.CursePointsEarned));
+	const float CursesH = Curses.IsEmpty() ? 0.f : LineH(SmallSize) + U(4.f);
+
 	// What this run unlocked, in a strip of its own above the buttons.
 	const FString Unlocks = FString::Join(GM.NewUnlocks, TEXT("   +   "));
 	const float UnlockPad = U(12.f);
@@ -3195,7 +3218,7 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 
 	const float StatPad = U(12.f);
 	const float StatH = StatPad * 2.f + LineH(TinySize) * 2.f + LineH(HeadingSize);
-	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + BonusesH + U(26.f) + TileH + U(16.f) + StatH + UnlockH + U(28.f) + BtnH + P;
+	const float CardH = P + LineH(TinySize) + U(2.f) + LineH(GameOverSize) + U(4.f) + LineH(BodySize) + RunKindH + BonusesH + CursesH + U(26.f) + TileH + U(16.f) + StatH + UnlockH + U(28.f) + BtnH + P;
 	const float X = CX - CardW * 0.5f;
 	float Y = (ScreenH - CardH) * 0.5f;
 	DrawPanel(X, Y, CardW, CardH, Red);
@@ -3222,6 +3245,11 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	{
 		DrawLabel(Bonuses, CX, Y + U(4.f), SmallSize, Green, ESpinTextAlign::Center, true);
 		Y += BonusesH;
+	}
+	if (!Curses.IsEmpty())
+	{
+		DrawLabel(Curses, CX, Y + U(4.f), SmallSize, Magenta, ESpinTextAlign::Center, true);
+		Y += CursesH;
 	}
 	Y += U(26.f);
 

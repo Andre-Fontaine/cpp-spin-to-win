@@ -732,7 +732,9 @@ void ASpinClock::Tick(float DeltaSeconds)
 	const bool bRaise = IsLiftActive();
 	const float LiftTarget = bRaise ? MaxHandLift : 0.f;
 	{
-		const float Stiffness = bRaise ? LiftRiseStiffness : LiftDropStiffness;
+		// Heavy Hand makes the rise sluggish.
+		const ASpinGameMode* LiftGM = GameMode.Get();
+		const float Stiffness = bRaise ? LiftRiseStiffness * (LiftGM ? LiftGM->GetLiftRiseScale() : 1.f) : LiftDropStiffness;
 		const float Damping = 2.f * (bRaise ? LiftRiseDamping : LiftDropDamping) * FMath::Sqrt(Stiffness);
 		const int32 Steps = FMath::Clamp(FMath::CeilToInt(DeltaSeconds * 240.f), 1, 24);
 		const float Step = DeltaSeconds / Steps;
@@ -1258,11 +1260,24 @@ void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 		SetGroupVisible(ZoneSegments, ZoneMarks, bShow);
 	}
 
-	const bool bShowSecond = GM.State != ESpinState::WaitingToStart && GM.bHasSecondZone;
+	// The second set of zone parts shows a pair's second zone - or Haunted Dial's fake, which hides
+	// with the real zone in a blackout.
+	const bool bShowSecond = GM.State != ESpinState::WaitingToStart
+		&& (GM.bHasSecondZone || (GM.bHasDecoyZone && GM.GetZoneVisibility() > 0.01f));
+	const float SecondCenter = GM.bHasSecondZone ? GM.SecondZoneCenter : GM.DecoyZoneCenter;
 	if (bShowSecond != bSecondZoneVisible)
 	{
 		bSecondZoneVisible = bShowSecond;
 		SetGroupVisible(SecondZoneSegments, SecondZoneMarks, bShowSecond);
+	}
+
+	// A wider PERFECT band (Sweet Spot) moves the grade lines on both zones.
+	const float PerfectFraction = GM.GetRunPerfectFraction();
+	if (!FMath::IsNearlyEqual(PerfectFraction, LastPerfectFraction, 0.0001f))
+	{
+		LastPerfectFraction = PerfectFraction;
+		LastZoneCenter = -1000.f;
+		LastSecondZoneCenter = -1000.f;
 	}
 
 	if (bShow && !(FMath::IsNearlyEqual(GM.ZoneCenter, LastZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.GetZoneHalfWidth(), LastZoneHalfWidth, 0.01f)))
@@ -1272,11 +1287,11 @@ void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 		LayoutZone(ZoneSegments, ZoneMarks, GM.ZoneCenter, GM.GetZoneHalfWidth(), GM);
 	}
 
-	if (bShowSecond && !(FMath::IsNearlyEqual(GM.SecondZoneCenter, LastSecondZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.GetZoneHalfWidth(), LastSecondZoneHalfWidth, 0.01f)))
+	if (bShowSecond && !(FMath::IsNearlyEqual(SecondCenter, LastSecondZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.GetZoneHalfWidth(), LastSecondZoneHalfWidth, 0.01f)))
 	{
-		LastSecondZoneCenter = GM.SecondZoneCenter;
+		LastSecondZoneCenter = SecondCenter;
 		LastSecondZoneHalfWidth = GM.GetZoneHalfWidth();
-		LayoutZone(SecondZoneSegments, SecondZoneMarks, GM.SecondZoneCenter, GM.GetZoneHalfWidth(), GM);
+		LayoutZone(SecondZoneSegments, SecondZoneMarks, SecondCenter, GM.GetZoneHalfWidth(), GM);
 	}
 }
 
@@ -1308,7 +1323,7 @@ void ASpinClock::LayoutZone(const TArray<TObjectPtr<UStaticMeshComponent>>& Segm
 
 	// Neon lines across the band where the hit grades change: inside the inner pair is PERFECT,
 	// out to the outer pair is GOOD, beyond that is OK. Raised just above the band so they show.
-	const float MarkFractions[NumZoneMarks] = { -GM.GoodFraction, -GM.PerfectFraction, GM.PerfectFraction, GM.GoodFraction };
+	const float MarkFractions[NumZoneMarks] = { -GM.GoodFraction, -GM.GetRunPerfectFraction(), GM.GetRunPerfectFraction(), GM.GoodFraction };
 	for (int32 i = 0; i < Marks.Num() && i < NumZoneMarks; ++i)
 	{
 		const float AngleDeg = Center + MarkFractions[i] * HalfWidth;
@@ -1360,6 +1375,14 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	{
 		const FLinearColor SecondBase = GM.Prompts.IsValidIndex(GM.SecondPromptIndex) ? GM.Prompts[GM.SecondPromptIndex].Color : ZoneBase;
 		SecondZoneMID->SetVectorParameterValue(ColorParam, SecondBase * (NeonMaterial ? ZoneGlow * 0.7f : 0.7f) * Dim * GM.GetZoneBrightness());
+	}
+	else if (SecondZoneMID && GM.bHasDecoyZone)
+	{
+		// Haunted Dial's fake: as bright as a real zone, but every so often it flickers - the tell.
+		const FLinearColor DecoyBase = GM.Prompts.IsValidIndex(GM.DecoyPromptIndex) ? GM.Prompts[GM.DecoyPromptIndex].Color : ZoneBase;
+		const FRandomStream Flicker(static_cast<int32>(HashCombine(static_cast<uint32>(FMath::FloorToInt(GetWorld()->GetTimeSeconds() * 12.f)), 0xDEC0u)));
+		const float Flick = Flicker.FRand() < 0.18f ? 0.25f : 1.f;
+		SecondZoneMID->SetVectorParameterValue(ColorParam, DecoyBase * (NeonMaterial ? ZoneGlow : 1.f) * Dim * ZoneVisibility * Flick);
 	}
 
 	// Successful hits flare the rings and the fill light, then fade back (the city does the same,
@@ -1463,7 +1486,7 @@ bool ASpinClock::IsLiftAvailable() const
 	for (const FObstacleState& S : ObstacleStates)
 	{
 		const bool bOut = S.Phase == EObstaclePhase::FadingIn || S.Phase == EObstaclePhase::Waiting;
-		if (bOut && !S.bPassed && !S.bHigh)
+		if (bOut && !S.bPassed && !S.bHigh && !S.bGhostHidden) // an unseen ghost post mustn't give itself away
 		{
 			return true;
 		}
@@ -1500,11 +1523,15 @@ void ASpinClock::UpdateObstaclePassing(ASpinGameMode& GM, float Moved)
 			{
 				GM.OnObstacleCleared(); // it got over the post, which counts towards a life back (passing under a high one doesn't)
 			}
+			else
+			{
+				GM.OnHighObstaclePassed(S.bTwin); // High Wire and Twin Posts pay out for these
+			}
 		}
 	}
 }
 
-void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh)
+void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float AheadDeg, bool bHigh, bool bTwin)
 {
 	for (int32 i = 0; i < ObstacleStates.Num(); ++i)
 	{
@@ -1526,6 +1553,7 @@ void ASpinClock::SpawnObstacle(float AngleDeg, float RadiusFraction, float Ahead
 		S.PassMarginDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(Reach / FMath::Max(Rho, 1.f), 0.f, 1.f))) + 3.f;
 		S.bPassed = false;
 		S.bHigh = bHigh;
+		S.bTwin = bTwin;
 
 		// High posts are flat squares, so they read differently from the round low posts at a glance.
 		UStaticMesh* Shape = bHigh ? SquarePostMesh.Get() : RoundPostMesh.Get();
@@ -1609,6 +1637,17 @@ void ASpinClock::UpdateObstacles(float DeltaSeconds)
 				ShowObstacle(i, false);
 				continue;
 			}
+		}
+
+		// Ghost Posts: an obstacle stays unseen until the hand is close (it still blocks the hand).
+		S.bGhostHidden = false;
+		if (const ASpinGameMode* GM = GameMode.Get(); GM && GM->HasGhostPosts() && S.Phase != EObstaclePhase::FadingOut && !S.bPassed
+			&& S.RemainingDeg > GM->GetHandSpeed() * GM->GhostPostsRevealTime)
+		{
+			S.bGhostHidden = true;
+			S.Glitch = 0.f;
+			ShowObstacle(i, false);
+			continue;
 		}
 
 		// The dark hull barely shows, so the neon's brightness is what reads as the fade. Glitching
