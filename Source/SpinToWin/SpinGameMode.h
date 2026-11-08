@@ -8,6 +8,7 @@
 
 class ASpinClock;
 class USpinSaveGame;
+struct FSpinProfile;
 
 UENUM(BlueprintType)
 enum class ESpinState : uint8
@@ -199,6 +200,18 @@ struct FSpinModifierInfo
 	const TCHAR* Requirement;
 	ESpinUnlockStat Stat;
 	int32 Target;
+};
+
+/** A twist that takes over one whole Endless level, rolled when the level starts. */
+UENUM(BlueprintType)
+enum class ESpinLevelEvent : uint8
+{
+	None,
+	/** The lights flicker and go out. Each new zone shows for a moment, then has to be hit from
+	 *  memory. Points are multiplied; a miss in the dark costs nothing but ends the blackout. */
+	Blackout,
+	/** Every zone comes as a pair: hit both on the same pass before the hand turns around. */
+	DoubleZone
 };
 
 UENUM(BlueprintType)
@@ -557,6 +570,56 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Spin|Obstacles", meta = (ClampMin = "0", ClampMax = "1"))
 	float LifeLostShake = 0.35f;
 
+	// ---------------- Level events (Endless) ----------------
+	//
+	// Each level from the start level on rolls once (from the run's seed, so the daily challenge gets
+	// the same events for everyone). Never two event levels in a row, and never on a level that opens
+	// with an explanation screen.
+
+	/** Blackout: first level it can happen on, and the chance per level. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "1"))
+	int32 BlackoutStartLevel = 10;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0", ClampMax = "1"))
+	float BlackoutChance = 0.15f;
+
+	/** Seconds the lights flicker before they go out. Play is normal while they flicker. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0.1"))
+	float BlackoutFlickerTime = 1.6f;
+
+	/** In the dark, each new zone shows for this long, then fades out over BlackoutZoneFadeTime. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0"))
+	float BlackoutZoneShowTime = 0.6f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0.01"))
+	float BlackoutZoneFadeTime = 0.25f;
+
+	/** How bright the lights stay once they're out (0 = pitch black, 1 = normal). The hand stays lit. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0", ClampMax = "1"))
+	float BlackoutLightLevel = 0.03f;
+
+	/** Seconds the lights take to come back on after a blackout. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0.01"))
+	float BlackoutRestoreTime = 0.6f;
+
+	/** Points from hits made in the dark are multiplied by this. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "1"))
+	float BlackoutPointsMultiplier = 2.f;
+
+	/** Double zone: first level it can happen on, and the chance per level. */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "1"))
+	int32 DoubleZoneStartLevel = 12;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0", ClampMax = "1"))
+	float DoubleZoneChance = 0.15f;
+
+	/** Gap in degrees between the two zones of a pair (edge to edge). */
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0"))
+	float DoubleZoneMinGap = 20.f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spin|Events", meta = (ClampMin = "0"))
+	float DoubleZoneMaxGap = 60.f;
+
 	// ---------------- Misses (Endless) ----------------
 
 	/** Separate lives for missed target zones (and wrong presses, and broken hands). Endless only -
@@ -786,6 +849,26 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 ActivePromptIndex = 0;
 
+	/** The event running on the current level, if any. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	ESpinLevelEvent LevelEvent = ESpinLevelEvent::None;
+
+	/** Double zone: the pair's second zone, which the hand reaches after the current one. Its width is
+	 *  ZoneHalfWidth too. Once the first is hit, it becomes the current zone. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	bool bHasSecondZone = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float SecondZoneCenter = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	int32 SecondPromptIndex = 0;
+
+	/** How lit the world is, 0..1: 1 normally, flickering and dropping to BlackoutLightLevel during a
+	 *  blackout. The dial (all but the hand) and the city scale their glow by it. */
+	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
+	float LightsLevel = 1.f;
+
 	/** The button the new-button screen (ESpinState::NewButtonIntro) is introducing. */
 	UPROPERTY(BlueprintReadOnly, Category = "Spin|State")
 	int32 NewButtonIndex = 1;
@@ -920,6 +1003,13 @@ public:
 	/** True while the hand is inside the target zone. */
 	bool IsHandInZone() const;
 
+	/** True once a blackout's lights are out (after the flicker), until the level ends or a miss
+	 *  ends it early. Zones hide and points are multiplied only then. */
+	bool IsBlackoutDark() const;
+
+	/** How visible the current zone is, 0..1: 1 normally; in the dark it shows briefly, then fades. */
+	float GetZoneVisibility() const;
+
 	/** Current Endless level, starting at 1. */
 	int32 GetLevel() const;
 
@@ -956,10 +1046,17 @@ public:
 	/** The active player's progress towards unlocking a modifier (Current can pass Target). */
 	void GetModifierProgress(ESpinModifier Modifier, int32& OutCurrent, int32& OutTarget) const;
 
+	/** Unlocked: claimed at the end of a run (only one unlock is claimed per run). */
 	bool IsModifierUnlocked(ESpinModifier Modifier) const;
+
+	/** Earned: the requirement is met, even if it hasn't been claimed yet. */
+	bool IsModifierEarned(ESpinModifier Modifier) const;
 
 	/** The modifiers unlocked by the active player (bit mask). */
 	int32 GetUnlockedModifiers() const;
+
+	/** The modifiers whose requirement the active player meets (bit mask), claimed or not. */
+	int32 GetEarnedModifiers() const;
 
 	/** The active player's lifetime value of an unlock stat (best level, jams fixed, ...). */
 	int32 GetUnlockStat(ESpinUnlockStat Stat) const;
@@ -994,7 +1091,21 @@ public:
 	/** The active player's progress towards unlocking a bonus (Current can pass Target). */
 	void GetBonusProgress(ESpinBonus Bonus, int32& OutCurrent, int32& OutTarget) const;
 
+	/** Unlocked: claimed at the end of a run (only one unlock is claimed per run). */
 	bool IsBonusUnlocked(ESpinBonus Bonus) const;
+
+	/** Earned: the requirement is met, even if it hasn't been claimed yet. */
+	bool IsBonusEarned(ESpinBonus Bonus) const;
+
+	/** The bonuses whose requirement the active player meets (bit mask), claimed or not. */
+	int32 GetEarnedBonuses() const;
+
+	/** Unlocks the first earned-but-unclaimed modifier or bonus on a profile, if any. Returns its
+	 *  name, or empty if nothing was waiting. */
+	FString ClaimNextUnlock(FSpinProfile& Profile) const;
+
+	/** Earned modifiers and bonuses the active player hasn't claimed yet. */
+	int32 GetPendingUnlockCount() const;
 
 	/** How many bonuses the active player can have on at once (1, more at SecondSlotLevel / ThirdSlotLevel). */
 	int32 GetBonusSlots() const;
@@ -1143,6 +1254,22 @@ private:
 	// Shared
 	void PickNextPrompt();
 	void PlaceNextZone(bool bAllowObstacle = true);
+
+	// Level events
+	/** Rolls the event for a level that has just started (from the seed and the level alone). */
+	ESpinLevelEvent RollLevelEvent(int32 Level, ESpinLevelEvent PreviousEvent) const;
+	void SetLevelEvent(ESpinLevelEvent Event);
+	void UpdateLights(float DeltaSeconds);
+
+	/** Seconds of play since the current level's event started (stops while paused). */
+	float EventTime = 0.f;
+
+	/** A miss in the dark ended this level's blackout early. */
+	bool bBlackoutBroken = false;
+
+	/** EventTime when the current zone was last shown (placed, or shown again after a pause or the
+	 *  invincibility countdown), for the blackout's brief look at it. */
+	float ZoneShownTime = 0.f;
 
 	UPROPERTY()
 	TObjectPtr<ASpinClock> Clock;

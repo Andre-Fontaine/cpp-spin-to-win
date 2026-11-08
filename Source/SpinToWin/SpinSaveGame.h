@@ -73,6 +73,14 @@ struct FSpinProfile
 	/** Bonuses switched on for their next Endless run (bit mask of 1 << ESpinBonus). */
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 EquippedBonuses = 0;
+
+	/** Modifiers and bonuses actually unlocked (bit masks). Meeting a requirement only earns one;
+	 *  at most one earned unlock is claimed at the end of each run. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 UnlockedModifiers = 0;
+
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 UnlockedBonuses = 0;
 };
 
 /**
@@ -126,6 +134,13 @@ public:
 
 	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
 	int32 DailyBoardDay = 0;
+
+	/** Save format version. 0: unlocks were worked out from stats alone (migrated on load by
+	 *  granting each profile everything it had already earned). 1: unlocks are stored per profile. */
+	UPROPERTY(SaveGame, BlueprintReadOnly, Category = "Spin")
+	int32 SaveVersion = 0;
+
+	static constexpr int32 CurrentSaveVersion = 1;
 
 	/** Adds a daily run to the board for DayKey (clearing it first if it's from another day).
 	 *  Returns its 1-based rank, or 0 if it didn't make the board. */

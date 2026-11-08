@@ -243,6 +243,8 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 	// Clamp so a frame hitch can't make the hand skip over the zone.
 	const float Dt = FMath::Min(DeltaSeconds, 0.05f);
 
+	UpdateLights(Dt);
+
 	if (State == ESpinState::WaitingToStart || State == ESpinState::ModeSelect || State == ESpinState::ModifierSelect || State == ESpinState::SettingsMenu
 		|| State == ESpinState::Leaderboard || State == ESpinState::ProfileSelect || State == ESpinState::NameEntry)
 	{
@@ -264,6 +266,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		if (ResumeTimeRemaining <= 0.f)
 		{
 			ResumeTimeRemaining = 0.f;
+			ZoneShownTime = EventTime; // in a blackout, another look at the zone after the break
 			if (!bInvincible && GetWorld())
 			{
 				InvincibilityEndTime = GetWorld()->GetTimeSeconds(); // the HUD's "GO!"
@@ -271,6 +274,8 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 		}
 		return;
 	}
+
+	EventTime += Dt;
 
 	// A jammed hand grinds along slowly, easing down when it jams and back up once it's fixed.
 	JamSpeedFactor = FMath::FInterpTo(JamSpeedFactor, JamPhase == EJamPhase::Jammed ? JamSlowdown : 1.f, Dt, 5.f);
@@ -301,6 +306,7 @@ void ASpinGameMode::Tick(float DeltaSeconds)
 			// Ending with the hand already inside a zone gives no fair chance to hit it (presses were
 			// ignored a moment ago), so that one zone can't count as a miss - it can still be hit.
 			bZoneMissForgiven = IsHandInZone();
+			ZoneShownTime = EventTime; // in a blackout, another look at the zone before play resumes
 			InvincibilityEndTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
 		}
 		else
@@ -587,6 +593,26 @@ bool ASpinGameMode::IsHandInZone() const
 	return FMath::Abs(FMath::FindDeltaAngleDegrees(HandAngle, ZoneCenter)) <= ZoneHalfWidth;
 }
 
+bool ASpinGameMode::IsBlackoutDark() const
+{
+	return !IsTutorial() && LevelEvent == ESpinLevelEvent::Blackout && !bBlackoutBroken && EventTime >= BlackoutFlickerTime;
+}
+
+float ASpinGameMode::GetZoneVisibility() const
+{
+	if (!IsBlackoutDark())
+	{
+		return 1.f;
+	}
+	// A zone placed while the lights were still flickering gets its look once they're out.
+	const float Since = EventTime - FMath::Max(ZoneShownTime, BlackoutFlickerTime);
+	if (Since <= BlackoutZoneShowTime)
+	{
+		return 1.f;
+	}
+	return FMath::Clamp(1.f - (Since - BlackoutZoneShowTime) / BlackoutZoneFadeTime, 0.f, 1.f);
+}
+
 int32 ASpinGameMode::GetHitsForLevel(int32 Level) const
 {
 	const bool bShortened = bFastStart && Level <= FastStartLevels;
@@ -779,6 +805,19 @@ void ASpinGameMode::LoadSaveData()
 	{
 		SaveData = Cast<USpinSaveGame>(UGameplayStatics::CreateSaveGameObject(USpinSaveGame::StaticClass()));
 	}
+	if (SaveData && SaveData->SaveVersion < 1)
+	{
+		// Unlocks used to follow straight from the stats. Keep everything each player already had,
+		// and limit them to one new unlock per run from here on.
+		for (FSpinProfile& Profile : SaveData->Profiles)
+		{
+			while (!ClaimNextUnlock(Profile).IsEmpty())
+			{
+			}
+		}
+		SaveData->SaveVersion = USpinSaveGame::CurrentSaveVersion;
+		WriteSaveData();
+	}
 	bPlayStationIcons = SaveData && SaveData->bPlayStationIcons;
 	SelectedModifiers = SaveData ? SaveData->SelectedModifiers : 0;
 	VolumePercent = SaveData ? SaveData->VolumePercent : 100;
@@ -806,9 +845,7 @@ void ASpinGameMode::RecordRun()
 	Run.Modifiers = RunModifiers;
 	Run.Bonuses = RunBonuses;
 
-	// What was unlocked before this run, to tell what it unlocked.
-	const int32 OldUnlocked = GetUnlockedBonuses();
-	const int32 OldModifiers = GetUnlockedModifiers();
+	// Bonus slots before this run, to tell whether it opened one.
 	const int32 OldSlots = GetBonusSlots();
 
 	// Daily runs only compete with that day's daily runs. One that ran past midnight is
@@ -837,27 +874,22 @@ void ASpinGameMode::RecordRun()
 		{
 			++Profile.RunsPlayed;
 		}
+
+		// Only one modifier or bonus unlocks per run; anything else earned waits for later runs.
+		const FString Claimed = ClaimNextUnlock(Profile);
+		if (!Claimed.IsEmpty())
+		{
+			NewUnlocks.Add(Claimed);
+		}
 	}
 
-	const int32 GainedModifiers = GetUnlockedModifiers() & ~OldModifiers;
-	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
-	{
-		if (GainedModifiers & (1 << i))
-		{
-			NewUnlocks.Add(GetModifierInfo(static_cast<ESpinModifier>(i)).Name);
-		}
-	}
-	const int32 Gained = GetUnlockedBonuses() & ~OldUnlocked;
-	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
-	{
-		if (Gained & (1 << i))
-		{
-			NewUnlocks.Add(GetBonusInfo(static_cast<ESpinBonus>(i)).Name);
-		}
-	}
 	for (int32 Slot = OldSlots + 1; Slot <= GetBonusSlots(); ++Slot)
 	{
 		NewUnlocks.Add(FString::Printf(TEXT("BONUS SLOT %d"), Slot));
+	}
+	if (const int32 Waiting = GetPendingUnlockCount())
+	{
+		NewUnlocks.Add(FString::Printf(TEXT("%d MORE NEXT RUN%s"), Waiting, Waiting == 1 ? TEXT("") : TEXT("S")));
 	}
 
 	WriteSaveData();
@@ -914,22 +946,52 @@ bool ASpinGameMode::HasModifier(ESpinModifier Modifier) const
 	return (RunModifiers & (1 << static_cast<int32>(Modifier))) != 0;
 }
 
+static int32 GetProfileStat(const FSpinProfile& Profile, ESpinUnlockStat Stat)
+{
+	switch (Stat)
+	{
+	case ESpinUnlockStat::BestLevel:        return Profile.BestLevel;
+	case ESpinUnlockStat::ObstaclesCleared: return Profile.ObstaclesCleared;
+	case ESpinUnlockStat::JamsFixed:        return Profile.JamsFixed;
+	case ESpinUnlockStat::RunsPlayed:       return Profile.RunsPlayed;
+	default:                                return 0;
+	}
+}
+
 int32 ASpinGameMode::GetUnlockStat(ESpinUnlockStat Stat) const
 {
 	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
-	if (!Profile)
-	{
-		return 0;
-	}
+	return Profile ? GetProfileStat(*Profile, Stat) : 0;
+}
 
-	switch (Stat)
+FString ASpinGameMode::ClaimNextUnlock(FSpinProfile& Profile) const
+{
+	// Modifiers first, then bonuses, each in list order.
+	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
 	{
-	case ESpinUnlockStat::BestLevel:        return Profile->BestLevel;
-	case ESpinUnlockStat::ObstaclesCleared: return Profile->ObstaclesCleared;
-	case ESpinUnlockStat::JamsFixed:        return Profile->JamsFixed;
-	case ESpinUnlockStat::RunsPlayed:       return Profile->RunsPlayed;
-	default:                                return 0;
+		const FSpinModifierInfo& Info = GetModifierInfo(static_cast<ESpinModifier>(i));
+		if (!(Profile.UnlockedModifiers & (1 << i)) && GetProfileStat(Profile, Info.Stat) >= Info.Target)
+		{
+			Profile.UnlockedModifiers |= 1 << i;
+			return Info.Name;
+		}
 	}
+	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
+	{
+		const FSpinBonusInfo& Info = GetBonusInfo(static_cast<ESpinBonus>(i));
+		if (!(Profile.UnlockedBonuses & (1 << i)) && GetProfileStat(Profile, Info.Stat) >= Info.Target)
+		{
+			Profile.UnlockedBonuses |= 1 << i;
+			return Info.Name;
+		}
+	}
+	return FString();
+}
+
+int32 ASpinGameMode::GetPendingUnlockCount() const
+{
+	return FMath::CountBits(static_cast<uint32>(GetEarnedModifiers() & ~GetUnlockedModifiers()))
+		+ FMath::CountBits(static_cast<uint32>(GetEarnedBonuses() & ~GetUnlockedBonuses()));
 }
 
 void ASpinGameMode::GetModifierProgress(ESpinModifier Modifier, int32& OutCurrent, int32& OutTarget) const
@@ -939,19 +1001,30 @@ void ASpinGameMode::GetModifierProgress(ESpinModifier Modifier, int32& OutCurren
 	OutCurrent = GetUnlockStat(Info.Stat);
 }
 
-bool ASpinGameMode::IsModifierUnlocked(ESpinModifier Modifier) const
+bool ASpinGameMode::IsModifierEarned(ESpinModifier Modifier) const
 {
 	int32 Current = 0, Target = 0;
 	GetModifierProgress(Modifier, Current, Target);
 	return Current >= Target;
 }
 
+bool ASpinGameMode::IsModifierUnlocked(ESpinModifier Modifier) const
+{
+	return (GetUnlockedModifiers() & (1 << static_cast<int32>(Modifier))) != 0;
+}
+
 int32 ASpinGameMode::GetUnlockedModifiers() const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	return Profile ? Profile->UnlockedModifiers : 0;
+}
+
+int32 ASpinGameMode::GetEarnedModifiers() const
 {
 	int32 Mask = 0;
 	for (int32 i = 0; i < static_cast<int32>(ESpinModifier::Count); ++i)
 	{
-		if (IsModifierUnlocked(static_cast<ESpinModifier>(i)))
+		if (IsModifierEarned(static_cast<ESpinModifier>(i)))
 		{
 			Mask |= 1 << i;
 		}
@@ -1093,19 +1166,30 @@ void ASpinGameMode::GetBonusProgress(ESpinBonus Bonus, int32& OutCurrent, int32&
 	OutCurrent = GetUnlockStat(Info.Stat);
 }
 
-bool ASpinGameMode::IsBonusUnlocked(ESpinBonus Bonus) const
+bool ASpinGameMode::IsBonusEarned(ESpinBonus Bonus) const
 {
 	int32 Current = 0, Target = 0;
 	GetBonusProgress(Bonus, Current, Target);
 	return Current >= Target;
 }
 
+bool ASpinGameMode::IsBonusUnlocked(ESpinBonus Bonus) const
+{
+	return (GetUnlockedBonuses() & (1 << static_cast<int32>(Bonus))) != 0;
+}
+
 int32 ASpinGameMode::GetUnlockedBonuses() const
+{
+	const FSpinProfile* Profile = SaveData ? SaveData->GetActiveProfile() : nullptr;
+	return Profile ? Profile->UnlockedBonuses : 0;
+}
+
+int32 ASpinGameMode::GetEarnedBonuses() const
 {
 	int32 Mask = 0;
 	for (int32 i = 0; i < static_cast<int32>(ESpinBonus::Count); ++i)
 	{
-		if (IsBonusUnlocked(static_cast<ESpinBonus>(i)))
+		if (IsBonusEarned(static_cast<ESpinBonus>(i)))
 		{
 			Mask |= 1 << i;
 		}
@@ -1409,6 +1493,7 @@ void ASpinGameMode::StartGame(bool bDaily)
 	bTutorialObstacleHit = false;
 	LiftPointsDebt = 0.f;
 	ResetJam();
+	SetLevelEvent(ESpinLevelEvent::None);
 	PlaceNextZone();
 }
 
@@ -1473,8 +1558,8 @@ void ASpinGameMode::OnHit()
 	// each of its hits counts for that many normal ones - in speed, zone shrink, and points.
 	const float RampSteps = static_cast<float>(FMath::Max(1, HitsPerLevel)) / GetHitsForLevel(OldLevel);
 
-	// Grade the hit before anything moves.
-	ScoreHit(GradeHit(), RampSteps);
+	// Grade the hit before anything moves. Hits made in the dark are worth more.
+	ScoreHit(GradeHit(), RampSteps * (IsBlackoutDark() ? BlackoutPointsMultiplier : 1.f));
 
 	++Hits;
 	RegisterHit();
@@ -1484,6 +1569,20 @@ void ASpinGameMode::OnHit()
 	RunRandom.Initialize(static_cast<int32>(HashCombine(static_cast<uint32>(RunSeed), static_cast<uint32>(Hits))));
 
 	const int32 NewLevel = GetLevel();
+
+	// The first zone of a pair: the hand carries straight on to the second one - no turn, no new
+	// zone. (If this hit finished the level, the pair ends here and the level-up goes as normal.)
+	if (bHasSecondZone && NewLevel == OldLevel)
+	{
+		Shake(HitShake);
+		CurrentSpeed = FMath::Min(CurrentSpeed * FMath::Pow(SpeedMultiplier, RampSteps), MaxSpeed);
+		ZoneHalfWidth = FMath::Max(GetRunMinZoneHalfWidth(), ZoneHalfWidth - ZoneShrinkPerHit * RampSteps);
+		ZoneCenter = SecondZoneCenter;
+		ActivePromptIndex = SecondPromptIndex;
+		bHasSecondZone = false;
+		bHandWasInZone = false;
+		return;
+	}
 
 	// The newest button this hit brings into play, if any.
 	int32 UnlockedButton = INDEX_NONE;
@@ -1509,6 +1608,13 @@ void ASpinGameMode::OnHit()
 	// best was already past them (they're newer than some saves).
 	const bool bHighObstacleIntro = !bButtonIntro && !bObstacleIntro && !bJamIntro && NewLevel >= HighObstacleStartLevel && !HasSeenHighPosts();
 	const bool bPauseScreen = bButtonIntro || bObstacleIntro || bJamIntro || bHighObstacleIntro;
+
+	// A new level rolls its event (none on a level that opens with an explanation screen). The
+	// previous level's event, if any, ends here.
+	if (NewLevel > OldLevel)
+	{
+		SetLevelEvent(bPauseScreen ? ESpinLevelEvent::None : RollLevelEvent(NewLevel, LevelEvent));
+	}
 
 	// The normal "LEVEL N" banner is skipped when a pause screen takes over instead.
 	if (NewLevel > OldLevel && GetWorld() && !bPauseScreen)
@@ -1630,6 +1736,21 @@ void ASpinGameMode::OnZoneMissed()
 
 void ASpinGameMode::Fail(ESpinMistake Mistake)
 {
+	// Missing in the dark is free - no life, the combo stays - but it ends the blackout (and its
+	// bonus): the lights come back on and the zone shows again. Posts and jams count as usual.
+	if (IsBlackoutDark() && (Mistake == ESpinMistake::MissedZone || Mistake == ESpinMistake::WrongButton))
+	{
+		bBlackoutBroken = true;
+		bHandWasInZone = false;
+		ZoneShownTime = EventTime;
+		Shake(HitShake);
+		ShowNotice(TEXT("Missed in the dark - the lights are back on"));
+		return;
+	}
+
+	// A mistake breaks up a pair: only the zone the hand was heading for is left.
+	bHasSecondZone = false;
+
 	LastMistake = Mistake;
 	Shake(LifeLostShake);
 	bHandWasInZone = false;
@@ -1737,6 +1858,7 @@ void ASpinGameMode::EndGame()
 
 	State = ESpinState::GameOver;
 	RecordRun();
+	SetLevelEvent(ESpinLevelEvent::None); // the lights come back on for the game-over screen
 
 	// Stop the sparks, but a hand that broke stays visibly broken.
 	if (!bHandBroke)
@@ -1771,6 +1893,7 @@ void ASpinGameMode::StartTutorial()
 	NoticeTime = -1000.f;
 	Direction = 1.f;
 	ResetJam();
+	SetLevelEvent(ESpinLevelEvent::None);
 	BeginTutorialLevel(0);
 }
 
@@ -2605,8 +2728,35 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 		Clock->RetireObstacles();
 	}
 
+	ZoneShownTime = EventTime;
+	bHasSecondZone = false;
+
+	// A double-zone level keeps posts out of the way: the pair is the challenge.
+	const bool bDouble = !IsTutorial() && LevelEvent == ESpinLevelEvent::DoubleZone;
+	if (bDouble)
+	{
+		bAllowObstacle = false;
+	}
+
 	// Place the zone ahead of the hand in its current direction of travel.
 	float Offset = RunRandom.FRandRange(MinZoneOffset, MaxZoneOffset);
+
+	if (bDouble)
+	{
+		// The second zone sits a gap beyond the first. Pull the pair back if needed so the second one
+		// still ends well before the hand's own position.
+		const float Span = ZoneHalfWidth * 2.f + RunRandom.FRandRange(DoubleZoneMinGap, FMath::Max(DoubleZoneMinGap, DoubleZoneMaxGap));
+		const float MaxFirst = 360.f - 15.f - ZoneHalfWidth - Span;
+		Offset = FMath::Min(Offset, FMath::Max(MinZoneOffset, MaxFirst));
+		SecondZoneCenter = FMath::Fmod(HandAngle + Direction * (Offset + Span) + 720.f, 360.f);
+		bHasSecondZone = true;
+
+		// Its own button (same no-long-repeats rule). The current zone keeps the one already picked.
+		const int32 FirstPrompt = ActivePromptIndex;
+		PickNextPrompt();
+		SecondPromptIndex = ActivePromptIndex;
+		ActivePromptIndex = FirstPrompt;
+	}
 
 	float Chance = ObstacleChance;
 	if (IsTutorial())
@@ -2639,4 +2789,64 @@ void ASpinGameMode::PlaceNextZone(bool bAllowObstacle)
 	}
 
 	ZoneCenter = FMath::Fmod(HandAngle + Direction * Offset + 360.f, 360.f);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Level events
+// ---------------------------------------------------------------------------------------------
+
+ESpinLevelEvent ASpinGameMode::RollLevelEvent(int32 Level, ESpinLevelEvent PreviousEvent) const
+{
+	// Never two in a row.
+	if (PreviousEvent != ESpinLevelEvent::None)
+	{
+		return ESpinLevelEvent::None;
+	}
+
+	// A stream of its own (seed and level only), so adding events never shifts the run's other rolls.
+	const FRandomStream Roll(static_cast<int32>(HashCombine(static_cast<uint32>(RunSeed), 0xE7E00000u + static_cast<uint32>(Level))));
+	const float R = Roll.FRand();
+	if (R < BlackoutChance)
+	{
+		return Level >= BlackoutStartLevel ? ESpinLevelEvent::Blackout : ESpinLevelEvent::None;
+	}
+	if (R < BlackoutChance + DoubleZoneChance && Level >= DoubleZoneStartLevel)
+	{
+		return ESpinLevelEvent::DoubleZone;
+	}
+	return ESpinLevelEvent::None;
+}
+
+void ASpinGameMode::SetLevelEvent(ESpinLevelEvent Event)
+{
+	LevelEvent = Event;
+	EventTime = 0.f;
+	ZoneShownTime = 0.f;
+	bBlackoutBroken = false;
+	bHasSecondZone = false;
+}
+
+void ASpinGameMode::UpdateLights(float DeltaSeconds)
+{
+	const bool bBlackout = State == ESpinState::Playing && !IsTutorial() && LevelEvent == ESpinLevelEvent::Blackout && !bBlackoutBroken;
+	if (!bBlackout)
+	{
+		// Back on, quickly but not instantly.
+		LightsLevel = FMath::FInterpConstantTo(LightsLevel, 1.f, DeltaSeconds, 1.f / BlackoutRestoreTime);
+		return;
+	}
+
+	if (EventTime >= BlackoutFlickerTime)
+	{
+		LightsLevel = BlackoutLightLevel;
+		return;
+	}
+
+	// The flicker: short random drop-outs that come more often, until the lights die for good.
+	// Seeded, so every light in the world (and every replay of the daily) flickers the same.
+	const float T = EventTime / BlackoutFlickerTime;
+	const int32 Slot = FMath::FloorToInt(EventTime * 14.f);
+	const FRandomStream Noise(static_cast<int32>(HashCombine(static_cast<uint32>(RunSeed), 0xF11C0000u + static_cast<uint32>(Slot))));
+	const bool bOn = T < 0.85f && Noise.FRand() < FMath::Lerp(0.8f, 0.2f, T);
+	LightsLevel = bOn ? 1.f : FMath::Lerp(BlackoutLightLevel, 1.f, 0.12f);
 }

@@ -1831,15 +1831,6 @@ void ASpinHUD::DrawRunHUD(const ASpinGameMode& GM)
 	DrawLevelModule(GM, CX, Top);
 	DrawHealthColumns(GM);
 
-	if (GM.JamPhase == EJamPhase::Sparking)
-	{
-		DrawEdgeGlow(GM, Orange, false);
-	}
-	else if (GM.JamPhase == EJamPhase::Jammed)
-	{
-		DrawEdgeGlow(GM, Red, true);
-	}
-
 	DrawControlStrip(GM, CX, ScreenH - U(Margin));
 	DrawCallout(GM, CX, U(196.f));
 	DrawHitPopup(GM, CX, CY - U(150.f));
@@ -1941,14 +1932,33 @@ void ASpinHUD::DrawZoneLabel(const ASpinGameMode& GM)
 		return;
 	}
 
-	// A key cap riding on the zone itself; it lights up while the hand is inside - "press now".
-	const FSpinPrompt& Prompt = GM.Prompts[GM.ActivePromptIndex];
-	const FString Key = GM.GetButtonKey(GM.ActivePromptIndex);
-	const FVector Screen = Project(Clock->GetZoneWorldLocation(0.5f));
 	const float Size = 20.f;
-	const float W = KeyCapWidth(Key, Size);
-	const float H = KeyCapHeight(Size);
-	DrawKeyCap(Key, Screen.X - W * 0.5f, Screen.Y - H * 0.5f, Size, Prompt.Color, GM.IsHandInZone());
+	auto DrawCapAt = [&](int32 PromptIndex, const FVector& World, bool bLit)
+	{
+		const FString Key = GM.GetButtonKey(PromptIndex);
+		const FVector Screen = Project(World);
+		const float W = KeyCapWidth(Key, Size);
+		const float H = KeyCapHeight(Size);
+		DrawKeyCap(Key, Screen.X - W * 0.5f, Screen.Y - H * 0.5f, Size, GM.Prompts[PromptIndex].Color, bLit);
+	};
+
+	// A key cap riding on the zone itself; it lights up while the hand is inside - "press now". Once
+	// a blackout has hidden the zone, the cap moves to the middle of the dial and stays unlit, so it
+	// says what to press without giving away where.
+	if (GM.GetZoneVisibility() >= 0.5f)
+	{
+		DrawCapAt(GM.ActivePromptIndex, Clock->GetZoneWorldLocation(0.5f), GM.IsHandInZone());
+	}
+	else
+	{
+		DrawCapAt(GM.ActivePromptIndex, Clock->GetDialWorldLocation(0.f, 0.f), false);
+	}
+
+	// A pair's second zone carries its own cap.
+	if (GM.bHasSecondZone && GM.Prompts.IsValidIndex(GM.SecondPromptIndex))
+	{
+		DrawCapAt(GM.SecondPromptIndex, Clock->GetDialWorldLocation(GM.SecondZoneCenter, 0.5f), false);
+	}
 }
 
 void ASpinHUD::DrawRunModule(const ASpinGameMode& GM, float X, float Y)
@@ -2236,46 +2246,38 @@ void ASpinHUD::DrawControlStrip(const ASpinGameMode& GM, float CenterX, float Bo
 
 void ASpinHUD::DrawRepairPanel(const ASpinGameMode& GM, float CenterX, float BottomY)
 {
+	// Kept to the bare minimum so it never hides the dial: the key to mash, flashing, and a slim bar
+	// of the time left before the hand breaks, just above the dial. No panel behind them.
 	const FString Key = GM.GetRepairKey();
-	const float P = U(20.f);
-	const float W = FMath::Min(U(600.f), ScreenW - U(Margin) * 2.f);
-	const float X = CenterX - W * 0.5f;
+	const float KeySize = 34.f;
+	const float CapW = KeyCapWidth(Key, KeySize);
+	const float CapH = KeyCapHeight(KeySize);
+	const float BarW = FMath::Max(U(220.f), CapW * 1.6f);
+	const float BarH = U(6.f);
+	const float StackH = CapH + U(12.f) + BarH;
 
-	// "MASH [W]" - the instruction is the headline, right above the bar it fills.
-	const float CapH = KeyCapHeight(HeadingSize);
-	const float MashRowH = FMath::Max(LineH(TitleSize), CapH);
-	const float SegH = U(18.f);
-	const float TimeH = U(6.f);
+	// Sits just above the dial: over its far rim (12 o'clock) on screen, so it follows the dial at
+	// any framing. Kept below the top modules, and on screen; without a dial, along the bottom.
+	float BarY = BottomY - BarH;
+	if (const ASpinClock* Clock = GM.GetClock())
+	{
+		const FVector Far = Project(Clock->GetDialWorldLocation(0.f, 1.f));
+		const FVector Centre = Project(Clock->GetDialWorldLocation(0.f, 0.f));
+		CenterX = Centre.X;
+		const float MinTop = U(200.f); // clear of the level / score modules
+		BarY = FMath::Clamp(Far.Y - U(24.f) - BarH, MinTop + StackH - BarH, BottomY - BarH);
+	}
+	const float CapY = BarY - U(12.f) - CapH;
 
-	const float MashY = 0.f; // offsets from the top, resolved once the panel height is known
-	const float RepairLabelY = MashY + MashRowH + U(10.f);
-	const float SegY = RepairLabelY + LineH(TinySize) + U(4.f);
-	const float TimeY = SegY + SegH + U(10.f);
-	const float TimeLabelY = TimeY + TimeH + U(4.f);
-	const float RuleY = TimeLabelY + LineH(TinySize) + U(8.f);
-	const float PanelH = P + RuleY + LineH(TinySize) + P;
-	const float Y = BottomY - PanelH + P;
-
-	DrawPanel(X, Y - P, W, PanelH, Red);
-
+	// The key flashes between lit and outlined, with a glow pulsing behind it.
 	const float Throb = Pulse01(Now, 22.f);
-	const FLinearColor MashColor = FMath::Lerp(Orange, Gold, Throb);
-	const float MashW = MeasureText(TEXT("MASH"), TitleSize, true).X + U(14.f);
-	const float CapW = KeyCapWidth(Key, HeadingSize);
-	const float MashX = CenterX - (MashW + CapW) * 0.5f;
-	DrawNeonText(TEXT("MASH"), MashX, Y + MashY + (MashRowH - LineH(TitleSize)) * 0.5f, TitleSize, MashColor, Orange, 0.2f + 0.2f * Throb, ESpinTextAlign::Left);
-	DrawKeyCap(Key, MashX + MashW, Y + MashY + (MashRowH - CapH) * 0.5f, HeadingSize, MashColor, Throb > 0.5f);
+	const FLinearColor KeyColor = FMath::Lerp(Orange, Gold, Throb);
+	DrawGlowSprite(CenterX, CapY + CapH * 0.5f, CapW * 2.6f, CapH * 2.8f, KeyColor, 0.25f + 0.3f * Throb);
+	DrawKeyCap(Key, CenterX - CapW * 0.5f, CapY, KeySize, KeyColor, Throb > 0.5f);
 
-	DrawLabel(TEXT("REPAIR"), X + P, Y + RepairLabelY, TinySize, TextDim, ESpinTextAlign::Left, true);
-	DrawLabel(FString::Printf(TEXT("%d / %d"), GM.JamPresses, GM.GetRunJamPressesRequired()), X + W - P, Y + RepairLabelY, TinySize, TextMain, ESpinTextAlign::Right, true);
-	DrawSegments(X + P, Y + SegY, W - P * 2.f, SegH, GM.GetRunJamPressesRequired(), GM.JamPresses, Green);
-
+	// Time left, draining from the right. It turns from orange to red as it runs out.
 	const float TimeFraction = GM.GetJamTimeFraction();
-	DrawBar(X + P, Y + TimeY, W - P * 2.f, TimeH, TimeFraction, Red);
-	DrawLabel(TEXT("BEFORE THE HAND BREAKS"), X + P, Y + TimeLabelY, TinySize, Red, ESpinTextAlign::Left, true);
-	DrawLabel(FString::Printf(TEXT("%.1fs"), GM.GetRunJamTimeLimit() * TimeFraction), X + W - P, Y + TimeLabelY, TinySize, Red, ESpinTextAlign::Right, true);
-
-	DrawLabel(FString::Printf(TEXT("Only %s works while jammed - zones and obstacles are ignored"), *Key), CenterX, Y + RuleY, TinySize, TextFaint, ESpinTextAlign::Center);
+	DrawBar(CenterX - BarW * 0.5f, BarY, BarW, BarH, TimeFraction, FMath::Lerp(Red, Orange, TimeFraction));
 }
 
 void ASpinHUD::DrawCallout(const ASpinGameMode& GM, float CenterX, float Y)
@@ -2287,20 +2289,13 @@ void ASpinHUD::DrawCallout(const ASpinGameMode& GM, float CenterX, float Y)
 	TArray<FSpinBriefLine> Subs;
 
 	// Highest priority first - only one message ever occupies the slot.
-	const FString RepairKey = GM.GetRepairKey();
-	if (GM.JamPhase == EJamPhase::Sparking)
+	if (GM.JamPhase != EJamPhase::None)
 	{
-		Title = TEXT("OVERHEATING!");
-		Color = FMath::Lerp(Orange, Gold, Pulse01(Now, 14.f));
-		Subs.Add({ FString::Printf(TEXT("The hand jams in %.1fs - get ready to mash %s"), FMath::Max(0.f, GM.GetRunJamSparkTime() - GM.JamTimer), *RepairKey), TextMain });
+		// Nothing here during a jam: the dial's sparks warn it's coming, and the flashing key and
+		// timer at the bottom cover the jam itself (see DrawRepairPanel). The dial stays clear.
+		return;
 	}
-	else if (GM.JamPhase == EJamPhase::Jammed)
-	{
-		Title = TEXT("JAMMED!");
-		Color = Red;
-		Subs.Add({ FString::Printf(TEXT("Mash %s to repair it before it breaks"), *RepairKey), TextMain });
-	}
-	else if (GM.IsShowingNotice())
+	if (GM.IsShowingNotice())
 	{
 		Title = GM.ExpandKeys(GM.NoticeText);
 		TitleFontSize = 20.f;
@@ -2326,6 +2321,11 @@ void ASpinHUD::DrawCallout(const ASpinGameMode& GM, float CenterX, float Y)
 			{
 				Subs.Add({ FString::Printf(TEXT("NEW:  %s"), *UnlockTitle), Orange });
 				Subs.Add({ UnlockHint, TextMain });
+			}
+			// (A blackout arrives unannounced - the flickering lights are the warning.)
+			if (GM.LevelEvent == ESpinLevelEvent::DoubleZone)
+			{
+				Subs.Add({ TEXT("DOUBLE ZONE  -  hit both zones before the hand turns"), Orange });
 			}
 		}
 	}
@@ -2410,54 +2410,6 @@ void ASpinHUD::DrawHitPopup(const ASpinGameMode& GM, float CenterX, float Y)
 	{
 		DrawNeonText(TEXT("COMBO LOST"), CenterX, Y + U(80.f), 16.f, Fade(Red, 1.f - SinceComboLost), Red, 0.25f, ESpinTextAlign::Center,
 			U(3.f) * (1.f - SinceComboLost));
-	}
-}
-
-void ASpinHUD::DrawEdgeGlow(const ASpinGameMode& GM, const FLinearColor& Color, bool bJammed)
-{
-	// The look is tuned on the clock in the level (Clock | Jam Border); these match its defaults.
-	const ASpinClock* Clock = GM.GetClock();
-	const float Speed = Clock ? (bJammed ? Clock->JamBorderJammedPulseSpeed : Clock->JamBorderWarningPulseSpeed) : (bJammed ? 20.f : 14.f);
-	const float SparksPerSecond = Clock ? (bJammed ? Clock->JamBorderJammedSparks : Clock->JamBorderWarningSparks) : (bJammed ? 30.f : 8.f);
-	const float MinBrightness = Clock ? Clock->JamBorderMinBrightness : 0.15f;
-	const float MaxBrightness = Clock ? Clock->JamBorderMaxBrightness : 0.45f;
-	const float Depth = U(Clock ? Clock->JamBorderDepth : 50.f);
-	const float T = U(Clock ? Clock->JamBorderLineThickness : 3.f);
-
-	// A wash of light in from every edge, pulsing.
-	const float I = FMath::Lerp(MinBrightness, MaxBrightness, Pulse01(Now, Speed));
-	const FLinearColor Wash = GlowOf(Color, I);
-	DrawTex(FadeRightTexture, 0.f, 0.f, Depth, ScreenH, Wash, true);
-	DrawTex(FadeRightTexture, ScreenW - Depth, 0.f, Depth, ScreenH, Wash, true, FVector2D(1.f, 0.f), FVector2D(0.f, 1.f));
-	DrawTex(FadeDownTexture, 0.f, 0.f, ScreenW, Depth, Wash, true);
-	DrawTex(FadeDownTexture, 0.f, ScreenH - Depth, ScreenW, Depth, Wash, true, FVector2D(0.f, 1.f), FVector2D(1.f, 0.f));
-
-	const FLinearColor Edge = Fade(Color, FMath::Lerp(0.3f, 0.85f, Pulse01(Now, Speed)));
-	DrawRect(Edge, 0.f, 0.f, ScreenW, T);
-	DrawRect(Edge, 0.f, ScreenH - T, ScreenW, T);
-	DrawRect(Edge, 0.f, T, T, ScreenH - T * 2.f);
-	DrawRect(Edge, ScreenW - T, T, T, ScreenH - T * 2.f);
-
-	// Sparks spraying in from the edges (not while paused - the run is frozen).
-	if (GetWorld() && GetWorld()->IsPaused())
-	{
-		return;
-	}
-	EdgeSparkCarry += SparksPerSecond * UiDelta;
-	while (EdgeSparkCarry >= 1.f)
-	{
-		EdgeSparkCarry -= 1.f;
-		const int32 Side = FMath::RandRange(0, 3);
-		FVector2D P;
-		float Angle;
-		switch (Side)
-		{
-		case 0:  P = FVector2D(FMath::FRand() * ScreenW, 0.f);     Angle = 90.f;  break;
-		case 1:  P = FVector2D(ScreenW, FMath::FRand() * ScreenH); Angle = 180.f; break;
-		case 2:  P = FVector2D(FMath::FRand() * ScreenW, ScreenH); Angle = -90.f; break;
-		default: P = FVector2D(0.f, FMath::FRand() * ScreenH);     Angle = 0.f;   break;
-		}
-		EmitSparks(P, FMath::RandRange(2, 4), FMath::FRand() < 0.7f ? SparkColor : Color, 420.f, Angle, 70.f);
 	}
 }
 
@@ -2731,6 +2683,14 @@ void ASpinHUD::DrawRunSetup(const ASpinGameMode& GM)
 			DrawLabel(Name, TextX, NameY, BodySize, bOn || F > 0.5f ? TextMain : TextDim, ESpinTextAlign::Left, true);
 			DrawLabel(Description, TextX, NameY + LineH(BodySize), SmallSize, TextDim);
 			DrawValue(ValueRight, RowY);
+		}
+		else if (Current >= Target)
+		{
+			// Earned, but waiting its turn: only one modifier or bonus unlocks per run.
+			DrawLockIcon(BoxX, BoxY, Box, FMath::Lerp(TextDim, Gold, 0.5f + 0.5f * F));
+			const float LabelY = RowY + (RowH - LineH(TinySize) - LineH(BodySize)) * 0.5f;
+			DrawLabel(FString::Printf(TEXT("EARNED  -  %s"), Name), TextX, LabelY, TinySize, Gold, ESpinTextAlign::Left, true);
+			DrawLabel(TEXT("UNLOCKS AFTER A RUN"), TextX, LabelY + LineH(TinySize), BodySize, FMath::Lerp(TextDim, TextMain, F), ESpinTextAlign::Left, true);
 		}
 		else
 		{

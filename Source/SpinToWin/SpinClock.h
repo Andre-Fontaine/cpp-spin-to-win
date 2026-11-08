@@ -561,38 +561,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera|Menu", meta = (ClampMin = "0.05"))
 	float MenuCameraTransitionTime = 0.6f;
 
-	// The jam border: the HUD's pulsing glow around the screen edges while the hand overheats
-	// (orange) and while it's jammed (red), with sparks spraying in from the edges.
-
-	/** How far the glow reaches in from each edge, in pixels at 1080p. */
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderDepth = 50.f;
-
-	/** Thickness of the solid line along the very edge, in pixels at 1080p. */
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderLineThickness = 3.f;
-
-	/** The glow's brightness pulses between these two (0..1-ish; higher is brighter). */
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderMinBrightness = 0.15f;
-
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderMaxBrightness = 0.45f;
-
-	/** How fast it pulses while overheating, and while jammed (higher = faster). */
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderWarningPulseSpeed = 14.f;
-
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderJammedPulseSpeed = 20.f;
-
-	/** Sparks per second thrown in from the edges while overheating, and while jammed. 0 = none. */
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderWarningSparks = 8.f;
-
-	UPROPERTY(EditAnywhere, Category = "Clock|Jam Border", meta = (ClampMin = "0"))
-	float JamBorderJammedSparks = 30.f;
-
 	/** Biggest camera offset (world units) at full shake intensity. */
 	UPROPERTY(EditAnywhere, Category = "Clock|Camera")
 	float MaxShakeOffset = 91.f;
@@ -618,6 +586,9 @@ public:
 private:
 	void BuildVisuals();
 	void UpdateZone(const ASpinGameMode& GM);
+	/** Lays a zone's arc and grade lines out around Center. */
+	void LayoutZone(const TArray<TObjectPtr<UStaticMeshComponent>>& Segments, const TArray<TObjectPtr<UStaticMeshComponent>>& Marks,
+		float Center, float HalfWidth, const ASpinGameMode& GM);
 	void UpdateColors(const ASpinGameMode& GM);
 	void UpdateMusic(const ASpinGameMode& GM);
 	void UpdateDialGrowth(float DeltaSeconds);
@@ -700,6 +671,13 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> ZoneMarks;
+
+	/** The second zone of a double-zone pair (see ESpinLevelEvent::DoubleZone), and its grade lines. */
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> SecondZoneSegments;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UStaticMeshComponent>> SecondZoneMarks;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> OuterRingSegments;
@@ -789,6 +767,9 @@ private:
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> ZoneMID;
+
+	UPROPERTY()
+	TObjectPtr<UMaterialInstanceDynamic> SecondZoneMID;
 
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> PerfectMarkMID;
@@ -928,4 +909,7 @@ private:
 	float LastZoneCenter = -1000.f;
 	float LastZoneHalfWidth = -1000.f;
 	bool bZonesVisible = true;
+	float LastSecondZoneCenter = -1000.f;
+	float LastSecondZoneHalfWidth = -1000.f;
+	bool bSecondZoneVisible = true;
 };

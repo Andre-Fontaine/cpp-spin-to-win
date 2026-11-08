@@ -175,6 +175,12 @@ float ASpinCityFX::GetHitPulse() const
 	return GM ? GM->GetHitPulse() : 0.f;
 }
 
+float ASpinCityFX::GetLightsLevel() const
+{
+	const ASpinGameMode* GM = GameMode.Get();
+	return GM ? GM->LightsLevel : 1.f;
+}
+
 void ASpinCityFX::UpdateGrid(float DeltaSeconds)
 {
 	if (GridMIDs.Num() == 0)
@@ -193,7 +199,7 @@ void ASpinCityFX::UpdateGrid(float DeltaSeconds)
 	CurrentGridIntensity = FMath::FInterpTo(CurrentGridIntensity, Target, DeltaSeconds, GridResponseSpeed);
 
 	// The hit pulse rides on top of the smoothed value, so it snaps in instantly instead of easing.
-	const float Intensity = CurrentGridIntensity + GridHitPulseBoost * GetHitPulse();
+	const float Intensity = (CurrentGridIntensity + GridHitPulseBoost * GetHitPulse()) * GetLightsLevel();
 
 	for (UMaterialInstanceDynamic* MID : GridMIDs)
 	{
@@ -213,6 +219,7 @@ void ASpinCityFX::UpdateTraces()
 
 	const float T = GetWorld()->GetTimeSeconds() * ChaseSpeed;
 	const float PulseBoost = TraceHitPulseBoost * GetHitPulse();
+	const float Lights = GetLightsLevel();
 
 	for (FSpinTraceChain& Chain : TraceChains)
 	{
@@ -229,7 +236,7 @@ void ASpinCityFX::UpdateTraces()
 			float Dist = FMath::Abs(static_cast<float>(i) - Head);
 			Dist = FMath::Min(Dist, Count - Dist); // wrap-around distance, so the chase loops smoothly
 			const float Falloff = FMath::Clamp(1.f - Dist / ChaseWidth, 0.f, 1.f);
-			const float Intensity = FMath::Lerp(ChaseDimIntensity, ChaseBrightIntensity, Falloff) + PulseBoost;
+			const float Intensity = (FMath::Lerp(ChaseDimIntensity, ChaseBrightIntensity, Falloff) + PulseBoost) * Lights;
 
 			if (UMaterialInstanceDynamic* MID = Chain.Segments[i])
 			{
@@ -248,6 +255,7 @@ void ASpinCityFX::UpdateFlickerNodes()
 
 	const float Now = GetWorld()->GetTimeSeconds();
 	const float PulseBoost = NodeHitPulseBoost * GetHitPulse();
+	const float Lights = GetLightsLevel();
 
 	for (FSpinFlickerNode& Node : FlickerNodes)
 	{
@@ -270,7 +278,7 @@ void ASpinCityFX::UpdateFlickerNodes()
 
 		// Set every frame (rather than only on flash changes) so the hit pulse can ride on top.
 		const float Base = (Node.FlashEndTime > 0.f) ? NodeBrightIntensity : NodeDimIntensity;
-		Node.MID->SetScalarParameterValue(IntensityParam, Base + PulseBoost);
+		Node.MID->SetScalarParameterValue(IntensityParam, (Base + PulseBoost) * Lights);
 	}
 }
 

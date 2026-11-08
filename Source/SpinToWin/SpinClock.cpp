@@ -178,6 +178,20 @@ ASpinClock::ASpinClock()
 		ZoneMarks.Add(Mark);
 	}
 
+	for (int32 i = 0; i < NumZoneSegments; ++i)
+	{
+		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("SecondZoneSegment%d"), i), CubeMesh, DialPivot);
+		Segment->SetCastShadow(false);
+		SecondZoneSegments.Add(Segment);
+	}
+
+	for (int32 i = 0; i < NumZoneMarks; ++i)
+	{
+		UStaticMeshComponent* Mark = MakeMesh(*FString::Printf(TEXT("SecondZoneMark%d"), i), CubeMesh, DialPivot);
+		Mark->SetCastShadow(false);
+		SecondZoneMarks.Add(Mark);
+	}
+
 	for (int32 i = 0; i < NumRingSegments; ++i)
 	{
 		UStaticMeshComponent* Segment = MakeMesh(*FString::Printf(TEXT("OuterRing%d"), i), CubeMesh, DialPivot);
@@ -281,13 +295,12 @@ void ASpinClock::OnConstruction(const FTransform& Transform)
 	// The zone only exists during a run; outside play there's nowhere to put it.
 	if (!GetWorld() || !GetWorld()->IsGameWorld())
 	{
-		for (UStaticMeshComponent* Segment : ZoneSegments)
+		for (auto* Group : { &ZoneSegments, &ZoneMarks, &SecondZoneSegments, &SecondZoneMarks })
 		{
-			Segment->SetVisibility(false);
-		}
-		for (UStaticMeshComponent* Mark : ZoneMarks)
-		{
-			Mark->SetVisibility(false);
+			for (UStaticMeshComponent* Mesh : *Group)
+			{
+				Mesh->SetVisibility(false);
+			}
 		}
 	}
 }
@@ -518,6 +531,18 @@ void ASpinClock::BuildVisuals()
 		{
 			const bool bGood = i == 0 || i == ZoneMarks.Num() - 1;
 			ZoneMarks[i]->SetMaterial(0, bGood ? GoodMarkMID : PerfectMarkMID);
+		}
+
+		// The second zone of a pair: its own colour (its own button), the same grade lines.
+		SecondZoneMID = UMaterialInstanceDynamic::Create(NeonMaterial ? NeonMaterial.Get() : BaseMaterial.Get(), this);
+		for (UStaticMeshComponent* Segment : SecondZoneSegments)
+		{
+			Segment->SetMaterial(0, SecondZoneMID);
+		}
+		for (int32 i = 0; i < SecondZoneMarks.Num(); ++i)
+		{
+			const bool bGood = i == 0 || i == SecondZoneMarks.Num() - 1;
+			SecondZoneMarks[i]->SetMaterial(0, bGood ? GoodMarkMID : PerfectMarkMID);
 		}
 
 		// Sparks glow: the emissive neon material when it's available (pushed well past 1 so it
@@ -1213,46 +1238,69 @@ void ASpinClock::UpdateSparks(float DeltaSeconds)
 
 void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 {
-	const bool bShow = GM.State != ESpinState::WaitingToStart;
+	auto SetGroupVisible = [](const TArray<TObjectPtr<UStaticMeshComponent>>& Segments, const TArray<TObjectPtr<UStaticMeshComponent>>& Marks, bool bVisible)
+	{
+		for (UStaticMeshComponent* Segment : Segments)
+		{
+			Segment->SetVisibility(bVisible);
+		}
+		for (UStaticMeshComponent* Mark : Marks)
+		{
+			Mark->SetVisibility(bVisible);
+		}
+	};
+
+	// In a blackout the zone fades out after a brief look (see ASpinGameMode::GetZoneVisibility).
+	const bool bShow = GM.State != ESpinState::WaitingToStart && GM.GetZoneVisibility() > 0.01f;
 	if (bShow != bZonesVisible)
 	{
 		bZonesVisible = bShow;
-		for (UStaticMeshComponent* Segment : ZoneSegments)
-		{
-			Segment->SetVisibility(bShow);
-		}
-		for (UStaticMeshComponent* Mark : ZoneMarks)
-		{
-			Mark->SetVisibility(bShow);
-		}
+		SetGroupVisible(ZoneSegments, ZoneMarks, bShow);
 	}
 
-	if (!bShow || ZoneSegments.Num() == 0)
+	const bool bShowSecond = GM.State != ESpinState::WaitingToStart && GM.bHasSecondZone;
+	if (bShowSecond != bSecondZoneVisible)
+	{
+		bSecondZoneVisible = bShowSecond;
+		SetGroupVisible(SecondZoneSegments, SecondZoneMarks, bShowSecond);
+	}
+
+	if (bShow && !(FMath::IsNearlyEqual(GM.ZoneCenter, LastZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.ZoneHalfWidth, LastZoneHalfWidth, 0.01f)))
+	{
+		LastZoneCenter = GM.ZoneCenter;
+		LastZoneHalfWidth = GM.ZoneHalfWidth;
+		LayoutZone(ZoneSegments, ZoneMarks, GM.ZoneCenter, GM.ZoneHalfWidth, GM);
+	}
+
+	if (bShowSecond && !(FMath::IsNearlyEqual(GM.SecondZoneCenter, LastSecondZoneCenter, 0.01f) && FMath::IsNearlyEqual(GM.ZoneHalfWidth, LastSecondZoneHalfWidth, 0.01f)))
+	{
+		LastSecondZoneCenter = GM.SecondZoneCenter;
+		LastSecondZoneHalfWidth = GM.ZoneHalfWidth;
+		LayoutZone(SecondZoneSegments, SecondZoneMarks, GM.SecondZoneCenter, GM.ZoneHalfWidth, GM);
+	}
+}
+
+void ASpinClock::LayoutZone(const TArray<TObjectPtr<UStaticMeshComponent>>& Segments, const TArray<TObjectPtr<UStaticMeshComponent>>& Marks,
+	float Center, float HalfWidth, const ASpinGameMode& GM)
+{
+	if (Segments.Num() == 0)
 	{
 		return;
 	}
-
-	if (FMath::IsNearlyEqual(GM.ZoneCenter, LastZoneCenter, 0.01f)
-		&& FMath::IsNearlyEqual(GM.ZoneHalfWidth, LastZoneHalfWidth, 0.01f))
-	{
-		return;
-	}
-	LastZoneCenter = GM.ZoneCenter;
-	LastZoneHalfWidth = GM.ZoneHalfWidth;
 
 	// The zone is an arc built from a row of small blocks laid along the dial.
-	const int32 Count = ZoneSegments.Num();
+	const int32 Count = Segments.Num();
 	const float Rho = DialRadius * ZoneRadiusFraction;
-	const float StepDeg = (GM.ZoneHalfWidth * 2.f) / Count;
+	const float StepDeg = (HalfWidth * 2.f) / Count;
 	const float TangentLength = FMath::DegreesToRadians(StepDeg) * Rho * 1.15f; // slight overlap, no gaps
 	const float RadialLength = DialRadius * ZoneThicknessFraction;
 
 	for (int32 i = 0; i < Count; ++i)
 	{
-		const float AngleDeg = GM.ZoneCenter - GM.ZoneHalfWidth + (i + 0.5f) * StepDeg;
+		const float AngleDeg = Center - HalfWidth + (i + 0.5f) * StepDeg;
 		const float Rad = FMath::DegreesToRadians(AngleDeg);
 
-		UStaticMeshComponent* Segment = ZoneSegments[i];
+		UStaticMeshComponent* Segment = Segments[i];
 		Segment->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 1.5f));
 		Segment->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
 		Segment->SetRelativeScale3D(FVector(RadialLength / 100.f, TangentLength / 100.f, 3.f / 100.f));
@@ -1261,12 +1309,12 @@ void ASpinClock::UpdateZone(const ASpinGameMode& GM)
 	// Neon lines across the band where the hit grades change: inside the inner pair is PERFECT,
 	// out to the outer pair is GOOD, beyond that is OK. Raised just above the band so they show.
 	const float MarkFractions[NumZoneMarks] = { -GM.GoodFraction, -GM.PerfectFraction, GM.PerfectFraction, GM.GoodFraction };
-	for (int32 i = 0; i < ZoneMarks.Num() && i < NumZoneMarks; ++i)
+	for (int32 i = 0; i < Marks.Num() && i < NumZoneMarks; ++i)
 	{
-		const float AngleDeg = GM.ZoneCenter + MarkFractions[i] * GM.ZoneHalfWidth;
+		const float AngleDeg = Center + MarkFractions[i] * HalfWidth;
 		const float Rad = FMath::DegreesToRadians(AngleDeg);
 
-		UStaticMeshComponent* Mark = ZoneMarks[i];
+		UStaticMeshComponent* Mark = Marks[i];
 		Mark->SetRelativeLocation(FVector(Rho * FMath::Cos(Rad), Rho * FMath::Sin(Rad), 3.2f));
 		Mark->SetRelativeRotation(FRotator(0.f, AngleDeg, 0.f));
 		Mark->SetRelativeScale3D(FVector(RadialLength * 0.92f / 100.f, ZoneMarkWidth / 100.f, 0.5f / 100.f));
@@ -1291,26 +1339,40 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	const float Breath = 0.1f * FMath::Sin(GetWorld()->GetTimeSeconds() * 4.f);
 	const float Dim = FMath::Lerp(1.f, InvincibleBrightness + Breath, InvincibleDim);
 
+	// A blackout: everything but the hand follows the lights down (see ASpinGameMode::LightsLevel).
+	// The zone keeps its own brightness for its brief look in the dark, then fades on its own.
+	const float Lights = GM.LightsLevel;
+	const float ZoneVisibility = GM.GetZoneVisibility();
+
 	if (ZoneMID)
 	{
-		ZoneMID->SetVectorParameterValue(ColorParam, ZoneColor * Dim);
+		ZoneMID->SetVectorParameterValue(ColorParam, ZoneColor * Dim * ZoneVisibility);
 	}
 
 	if (PerfectMarkMID && GoodMarkMID)
 	{
-		PerfectMarkMID->SetVectorParameterValue(ColorParam, PerfectMarkColor * Dim);
-		GoodMarkMID->SetVectorParameterValue(ColorParam, GoodMarkColor * Dim);
+		PerfectMarkMID->SetVectorParameterValue(ColorParam, PerfectMarkColor * Dim * ZoneVisibility);
+		GoodMarkMID->SetVectorParameterValue(ColorParam, GoodMarkColor * Dim * ZoneVisibility);
+	}
+
+	// A pair's second zone, in its own button's colour, a little dimmer until it's the one to hit.
+	if (SecondZoneMID && GM.bHasSecondZone)
+	{
+		const FLinearColor SecondBase = GM.Prompts.IsValidIndex(GM.SecondPromptIndex) ? GM.Prompts[GM.SecondPromptIndex].Color : ZoneBase;
+		SecondZoneMID->SetVectorParameterValue(ColorParam, SecondBase * (NeonMaterial ? ZoneGlow * 0.7f : 0.7f) * Dim);
 	}
 
 	// Successful hits flare the rings and the fill light, then fade back (the city does the same,
 	// see ASpinCityFX).
 	const float Pulse = FMath::Max(GM.GetHitPulse(), DialGrowFlash);
-	const float RingGlow = (1.f + RingHitPulseBoost * Pulse) * Dim;
+	const float RingGlow = (1.f + RingHitPulseBoost * Pulse) * Dim * Lights;
 
 	if (OuterRingMID)
 	{
-		// The whole rim glows the colour of whichever button the next zone needs.
-		OuterRingMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : ZoneBase * RingGlow);
+		// The whole rim glows the colour of whichever button the next zone needs. In the dark it
+		// keeps a faint glow, so the button to press is never hidden.
+		const float RimGlow = (1.f + RingHitPulseBoost * Pulse) * Dim * FMath::Lerp(0.2f, 1.f, Lights);
+		OuterRingMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : ZoneBase * RimGlow);
 	}
 
 	if (InnerRingMID)
@@ -1319,7 +1381,7 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 	}
 
 	// Ticks and track flare too, but more gently than the rings so they stay in the background.
-	const float DetailGlow = (1.f + RingHitPulseBoost * 0.5f * Pulse) * Dim;
+	const float DetailGlow = (1.f + RingHitPulseBoost * 0.5f * Pulse) * Dim * Lights;
 	if (TickMID)
 	{
 		TickMID->SetVectorParameterValue(ColorParam, DialGlitch > 0.f ? DialGlitchTint : TickColor * DetailGlow);
@@ -1331,7 +1393,7 @@ void ASpinClock::UpdateColors(const ASpinGameMode& GM)
 
 	if (FillLight)
 	{
-		FillLight->SetIntensity(FillLightIntensity * (1.f + FillLightHitPulseBoost * Pulse) * Dim);
+		FillLight->SetIntensity(FillLightIntensity * (1.f + FillLightHitPulseBoost * Pulse) * Dim * Lights);
 	}
 
 	if (HandMID)

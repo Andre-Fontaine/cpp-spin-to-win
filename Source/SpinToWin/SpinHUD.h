@@ -313,7 +313,8 @@ private:
 	 *  with -1 / +1 feedback. */
 	void DrawHealthColumns(const ASpinGameMode& GM);
 
-	/** Bottom: the tutorial stage's one-line reminder - or, while jammed, the repair panel. */
+	/** Bottom: the tutorial stage's one-line reminder - or, while jammed, the repair key and timer
+	 *  (drawn just above the dial; BottomY is only the fallback without one). */
 	void DrawControlStrip(const ASpinGameMode& GM, float CenterX, float BottomY);
 	void DrawRepairPanel(const ASpinGameMode& GM, float CenterX, float BottomY);
 
@@ -324,9 +325,6 @@ private:
 	/** "PERFECT! +300" after each hit, and "COMBO LOST". */
 	void DrawHitPopup(const ASpinGameMode& GM, float CenterX, float Y);
 
-	/** Pulsing glow around the screen edges (jam warning / jammed), throwing sparks in from the edges.
-	 *  Its size, brightness, pulse and sparks are set on the clock (Clock | Jam Border). */
-	void DrawEdgeGlow(const ASpinGameMode& GM, const FLinearColor& Color, bool bJammed);
 
 	/** Each whole second of the invincibility window punches in huge and quickly shrinks and fades. */
 	void DrawInvincibilityCountdown(float TimeRemaining, float CenterX, float CenterY);
@@ -403,7 +401,6 @@ private:
 	TArray<FSpinSpark> Sparks;
 	float CornerSparkTimer = 0.5f;
 	float FocusSparkTimer = 0.5f;
-	float EdgeSparkCarry = 0.f;
 	int32 LastArcSlot = -1;
 
 	UPROPERTY(Transient)

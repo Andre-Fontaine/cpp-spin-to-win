@@ -165,6 +165,13 @@ void ASpinCityBuilder::BeginPlay()
 	GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
 	// The dynamic materials are transient, so a play session needs its own (the instances themselves are saved).
 	SetupMaterials();
+
+	// A city saved before buildings were recorded has no records to glitch: build it again (same seed,
+	// so it comes out identical) to make them.
+	if (bBuildingGlitches && BuildingFirstPart.Num() == 0)
+	{
+		Build();
+	}
 	InitLife();
 }
 
@@ -194,6 +201,18 @@ void ASpinCityBuilder::SetupMaterials()
 		MID->SetScalarParameterValue(IntensityParam, Intensity);
 		return MID;
 	};
+	SteadyGlowMIDs.Reset();
+	SteadyGlowIntensities.Reset();
+	AppliedLightsLevel = 1.f;
+	auto AddSteadyGlow = [this](UMaterialInstanceDynamic* MID, float Intensity) -> UMaterialInstanceDynamic*
+	{
+		if (MID && Intensity > 0.f)
+		{
+			SteadyGlowMIDs.Add(MID);
+			SteadyGlowIntensities.Add(Intensity);
+		}
+		return MID;
+	};
 
 	// Tower bodies: each distance band a step further from dark hull toward the haze colour. They glow
 	// faintly (on M_Neon, so they also wait for the city reveal like everything else).
@@ -201,7 +220,7 @@ void ASpinCityBuilder::SetupMaterials()
 	{
 		const float T = static_cast<float>(Band) / FMath::Max(1, NumHullBands - 1);
 		UMaterialInstanceDynamic* HullMID = NeonMaterial
-			? MakeMID(NeonMaterial, FMath::Lerp(HullColor, DepthHazeColor, T), DepthHazeIntensity)
+			? AddSteadyGlow(MakeMID(NeonMaterial, FMath::Lerp(HullColor, DepthHazeColor, T), DepthHazeIntensity), DepthHazeIntensity)
 			: MakeMID(BaseMaterial, HullColor, 0.f);
 		HullBoxes[Band]->SetMaterial(0, HullMID);
 		HullCylinders[Band]->SetMaterial(0, HullMID);
@@ -211,8 +230,8 @@ void ASpinCityBuilder::SetupMaterials()
 	LakeWater->SetMaterial(0, WaterMaterial ? WaterMaterial.Get() : Floor->GetMaterial(0));
 
 	CarBodies->SetMaterial(0, MakeMID(BaseMaterial, HullColor, 0.f));
-	CarHeadlights->SetMaterial(0, MakeMID(Glow, HeadlightColor, NeonIntensity * 1.5f));
-	CarTaillights->SetMaterial(0, MakeMID(Glow, TaillightColor, NeonIntensity * 1.5f));
+	CarHeadlights->SetMaterial(0, AddSteadyGlow(MakeMID(Glow, HeadlightColor, NeonIntensity * 1.5f), NeonIntensity * 1.5f));
+	CarTaillights->SetMaterial(0, AddSteadyGlow(MakeMID(Glow, TaillightColor, NeonIntensity * 1.5f), NeonIntensity * 1.5f));
 
 	NeonMIDs.Reset();
 	for (int32 i = 0; i < NumSlots; ++i)
@@ -257,7 +276,7 @@ void ASpinCityBuilder::SetupMaterials()
 		FlickerMIDs.Add(MID);
 	}
 
-	MoteMID = MakeMID(Glow, MoteColor, MoteIntensity);
+	MoteMID = AddSteadyGlow(MakeMID(Glow, MoteColor, MoteIntensity), MoteIntensity);
 	Motes->SetMaterial(0, MoteMID);
 
 	RippleMIDs.Reset();
@@ -376,16 +395,31 @@ void ASpinCityBuilder::Tick(float DeltaSeconds)
 
 	float Pulse = 0.f;
 	float SpeedFactor = 0.f;
+	float Lights = 1.f;
 	if (const ASpinGameMode* GM = GameMode.Get())
 	{
 		Pulse = GM->GetHitPulse();
 		const float Range = FMath::Max(1.f, GM->MaxSpeed - GM->StartSpeed);
 		SpeedFactor = FMath::Clamp((GM->CurrentSpeed - GM->StartSpeed) / Range, 0.f, 1.f);
+		Lights = GM->LightsLevel;
 	}
 	CurrentFloorSpeed = FMath::FInterpTo(CurrentFloorSpeed, SpeedFactor, DeltaSeconds, 1.5f);
 
 	// While the hand is jammed, everything dims and flashes random colours (see UpdateJamGlitch).
-	const float GlitchDim = UpdateJamGlitch(DeltaSeconds);
+	// A blackout takes everything down with the lights level.
+	const float GlitchDim = UpdateJamGlitch(DeltaSeconds) * Lights;
+
+	if (!FMath::IsNearlyEqual(Lights, AppliedLightsLevel, 0.001f))
+	{
+		AppliedLightsLevel = Lights;
+		for (int32 i = 0; i < SteadyGlowMIDs.Num(); ++i)
+		{
+			if (UMaterialInstanceDynamic* MID = SteadyGlowMIDs[i])
+			{
+				MID->SetScalarParameterValue(IntensityParam, SteadyGlowIntensities[i] * Lights);
+			}
+		}
+	}
 
 	const float Flare = (1.f + HitPulseBoost * Pulse) * GlitchDim;
 	for (UMaterialInstanceDynamic* MID : NeonMIDs)
@@ -411,6 +445,8 @@ void ASpinCityBuilder::Tick(float DeltaSeconds)
 	UpdateSignFlicker(DeltaSeconds, Flare);
 	UpdateMotes(DeltaSeconds, World->GetTimeSeconds());
 	UpdateRipples(DeltaSeconds, Flare);
+	UpdateJamLayers(DeltaSeconds);
+	UpdateBuildingGlitches(DeltaSeconds);
 	UpdateFlyingCars(DeltaSeconds);
 }
 
@@ -887,6 +923,247 @@ void ASpinCityBuilder::UpdateRipples(float DeltaSeconds, float Flare)
 }
 
 // ---------------------------------------------------------------------------------------------
+// Building glitches
+// ---------------------------------------------------------------------------------------------
+
+TArray<UInstancedStaticMeshComponent*> ASpinCityBuilder::GetGlitchLayers() const
+{
+	TArray<UInstancedStaticMeshComponent*> GlitchLayers;
+	for (const TArray<TObjectPtr<UInstancedStaticMeshComponent>>* Group : { &HullBoxes, &HullCylinders, &NeonBoxes, &NeonDiscs, &WindowGroups, &FlickerSigns })
+	{
+		for (UInstancedStaticMeshComponent* ISM : *Group)
+		{
+			GlitchLayers.Add(ISM);
+		}
+	}
+	GlitchLayers.Add(Beacons);
+	return GlitchLayers;
+}
+
+void ASpinCityBuilder::BeginBuilding(const FVector& Base, float Size)
+{
+	CurrentBuilding = BuildingFirstPart.Add(BuildingParts.Num());
+	BuildingNumParts.Add(0);
+	BuildingBase.Add(Base);
+	BuildingSize.Add(Size);
+}
+
+void ASpinCityBuilder::EndBuilding()
+{
+	// One that came out empty (it all landed off-view, say) isn't worth keeping.
+	if (CurrentBuilding != INDEX_NONE && BuildingNumParts[CurrentBuilding] == 0)
+	{
+		BuildingFirstPart.Pop();
+		BuildingNumParts.Pop();
+		BuildingBase.Pop();
+		BuildingSize.Pop();
+	}
+	CurrentBuilding = INDEX_NONE;
+}
+
+void ASpinCityBuilder::AddPending(UInstancedStaticMeshComponent* ISM, const FTransform& Transform)
+{
+	if (!ISM)
+	{
+		return;
+	}
+	TArray<FTransform>& List = Pending.FindOrAdd(ISM);
+	// The instance's index is its place in this list: Build clears each mesh first, then adds the
+	// whole list in order.
+	if (CurrentBuilding != INDEX_NONE)
+	{
+		if (const int32* Layer = LayerIds.Find(ISM))
+		{
+			BuildingParts.Add((*Layer << 24) | (List.Num() & 0xFFFFFF));
+			++BuildingNumParts[CurrentBuilding];
+		}
+	}
+	List.Add(Transform);
+}
+
+void ASpinCityBuilder::EndBuildingGlitch(int32 GlitchIndex)
+{
+	// Back to exactly where it was.
+	const FBuildingGlitch& G = BuildingGlitches[GlitchIndex];
+	const TArray<UInstancedStaticMeshComponent*> GlitchLayers = GetGlitchLayers();
+	if (BuildingFirstPart.IsValidIndex(G.Building))
+	{
+		const int32 First = BuildingFirstPart[G.Building];
+		for (int32 k = 0; k < G.Rest.Num() && BuildingParts.IsValidIndex(First + k); ++k)
+		{
+			const int32 Part = BuildingParts[First + k];
+			UInstancedStaticMeshComponent* ISM = GlitchLayers.IsValidIndex(Part >> 24) ? GlitchLayers[Part >> 24] : nullptr;
+			if (ISM && (Part & 0xFFFFFF) < ISM->GetInstanceCount())
+			{
+				ISM->UpdateInstanceTransform(Part & 0xFFFFFF, G.Rest[k], false, false, true);
+			}
+		}
+	}
+	BuildingGlitches.RemoveAtSwap(GlitchIndex);
+}
+
+void ASpinCityBuilder::UpdateBuildingGlitches(float DeltaSeconds)
+{
+	const int32 NumBuildings = FMath::Min(BuildingFirstPart.Num(), FMath::Min(BuildingNumParts.Num(), FMath::Min(BuildingBase.Num(), BuildingSize.Num())));
+	if (!bBuildingGlitches || NumBuildings == 0)
+	{
+		while (BuildingGlitches.Num() > 0)
+		{
+			EndBuildingGlitch(BuildingGlitches.Num() - 1);
+		}
+		return;
+	}
+
+	const TArray<UInstancedStaticMeshComponent*> GlitchLayers = GetGlitchLayers();
+
+	// New glitches: a steady trickle, a little more as the hand speeds up, and a flood during a jam.
+	// Mostly on buildings the city's light has reached (the dark ones would barely show it).
+	const float Rate = FMath::Lerp(BuildingGlitchRateMin, BuildingGlitchRateMax, CurrentFloorSpeed) * FMath::Lerp(1.f, JamBuildingGlitchRateScale, JamGlitch);
+	BuildingGlitchOwed += Rate * DeltaSeconds;
+	const float Reach = CityFX.IsValid() ? CityFX->GetRevealOuterRadius() : BIG_NUMBER;
+	while (BuildingGlitchOwed >= 1.f && BuildingGlitches.Num() < MaxGlitchingBuildings)
+	{
+		BuildingGlitchOwed -= 1.f;
+
+		int32 Pick = INDEX_NONE;
+		for (int32 Try = 0; Try < 6 && Pick == INDEX_NONE; ++Try)
+		{
+			const int32 B = FMath::RandHelper(NumBuildings);
+			if (FVector2D(BuildingBase[B]).Size() - BuildingSize[B] > Reach && Try < 5)
+			{
+				continue;
+			}
+			if (!BuildingGlitches.ContainsByPredicate([B](const FBuildingGlitch& G) { return G.Building == B; }))
+			{
+				Pick = B;
+			}
+		}
+		if (Pick == INDEX_NONE)
+		{
+			continue;
+		}
+
+		FBuildingGlitch& G = BuildingGlitches.AddDefaulted_GetRef();
+		G.Building = Pick;
+		G.TimeLeft = FMath::FRandRange(BuildingGlitchMinTime, FMath::Max(BuildingGlitchMinTime, BuildingGlitchMaxTime)) * FMath::Lerp(1.f, 1.6f, JamGlitch);
+		G.Strength = FMath::Lerp(1.f, JamBuildingGlitchStrength, JamGlitch);
+		G.StepTimer = 0.f;
+		const int32 First = BuildingFirstPart[Pick];
+		for (int32 k = 0; k < BuildingNumParts[Pick] && BuildingParts.IsValidIndex(First + k); ++k)
+		{
+			const int32 Part = BuildingParts[First + k];
+			UInstancedStaticMeshComponent* ISM = GlitchLayers.IsValidIndex(Part >> 24) ? GlitchLayers[Part >> 24] : nullptr;
+			FTransform Rest = FTransform::Identity;
+			if (ISM && (Part & 0xFFFFFF) < ISM->GetInstanceCount())
+			{
+				ISM->GetInstanceTransform(Part & 0xFFFFFF, Rest, false);
+			}
+			G.Rest.Add(Rest);
+		}
+	}
+	BuildingGlitchOwed = FMath::Min(BuildingGlitchOwed, 1.f); // no backlog once the cap is reached
+
+	// Each glitch jumps every few frames: sideways, squashed or stretched about its base, or blinked
+	// out altogether - then snaps back when it's done.
+	for (int32 i = BuildingGlitches.Num() - 1; i >= 0; --i)
+	{
+		FBuildingGlitch& G = BuildingGlitches[i];
+		G.TimeLeft -= DeltaSeconds;
+		if (G.TimeLeft <= 0.f || !BuildingFirstPart.IsValidIndex(G.Building))
+		{
+			EndBuildingGlitch(i);
+			continue;
+		}
+		G.StepTimer -= DeltaSeconds;
+		if (G.StepTimer > 0.f)
+		{
+			continue;
+		}
+		G.StepTimer = 1.f / FMath::Max(1.f, BuildingGlitchStepRate);
+
+		const FVector Base = BuildingBase[G.Building];
+		const float Size = BuildingSize[G.Building];
+		const bool bBlink = FMath::FRand() < BuildingGlitchBlinkChance * FMath::Lerp(1.f, 1.5f, JamGlitch);
+		const FVector Offset = FVector(FMath::FRandRange(-1.f, 1.f), FMath::FRandRange(-1.f, 1.f), 0.f) * Size * BuildingGlitchShift * G.Strength;
+		const float SX = 1.f + FMath::FRandRange(-0.04f, 0.04f) * G.Strength;
+		const float SZ = FMath::FRand() < 0.35f ? FMath::FRandRange(FMath::Max(0.15f, 1.f - 0.25f * G.Strength), 1.f + 0.12f * G.Strength) : 1.f;
+		const FVector Scale(SX, SX, SZ);
+
+		const int32 First = BuildingFirstPart[G.Building];
+		for (int32 k = 0; k < G.Rest.Num() && BuildingParts.IsValidIndex(First + k); ++k)
+		{
+			const int32 Part = BuildingParts[First + k];
+			UInstancedStaticMeshComponent* ISM = GlitchLayers.IsValidIndex(Part >> 24) ? GlitchLayers[Part >> 24] : nullptr;
+			if (!ISM || (Part & 0xFFFFFF) >= ISM->GetInstanceCount())
+			{
+				continue;
+			}
+			const FTransform& Rest = G.Rest[k];
+			FTransform Moved = Rest;
+			if (bBlink)
+			{
+				Moved.SetScale3D(FVector::ZeroVector);
+			}
+			else
+			{
+				const FVector Rel = Rest.GetLocation() - Base;
+				Moved.SetLocation(Base + Rel * Scale + Offset);
+				Moved.SetScale3D(Rest.GetScale3D() * Scale);
+			}
+			ISM->UpdateInstanceTransform(Part & 0xFFFFFF, Moved, false, false, true);
+		}
+	}
+}
+
+void ASpinCityBuilder::UpdateJamLayers(float DeltaSeconds)
+{
+	const TArray<UInstancedStaticMeshComponent*> GlitchLayers = GetGlitchLayers();
+	if (JamGlitch <= 0.f || !bBuildingGlitches)
+	{
+		if (bJamLayersMoved)
+		{
+			for (UInstancedStaticMeshComponent* Layer : GlitchLayers)
+			{
+				if (Layer)
+				{
+					Layer->SetRelativeTransform(FTransform::Identity);
+				}
+			}
+			bJamLayersMoved = false;
+		}
+		return;
+	}
+
+	// The whole skyline comes apart: every few frames each layer (a band of tower bodies, a colour of
+	// neon, a batch of windows) either snaps home or jumps off on its own, squashed or stretched from
+	// the ground - so the buildings' bodies, outlines and windows slide out of line with each other.
+	JamLayerTimer -= DeltaSeconds;
+	if (JamLayerTimer > 0.f)
+	{
+		return;
+	}
+	JamLayerTimer = 1.f / FMath::FRandRange(8.f, 16.f);
+	for (UInstancedStaticMeshComponent* Layer : GlitchLayers)
+	{
+		if (!Layer)
+		{
+			continue;
+		}
+		if (FMath::FRand() < 0.55f * JamGlitch)
+		{
+			const FVector Offset = FVector(FMath::FRandRange(-1.f, 1.f), FMath::FRandRange(-1.f, 1.f), 0.f) * JamLayerShift * JamGlitch;
+			const float SZ = 1.f + FMath::FRandRange(-JamLayerSquash, JamLayerSquash * 0.5f) * JamGlitch;
+			Layer->SetRelativeTransform(FTransform(FQuat::Identity, Offset, FVector(1.f, 1.f, SZ)));
+		}
+		else
+		{
+			Layer->SetRelativeTransform(FTransform::Identity);
+		}
+	}
+	bJamLayersMoved = true;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Building blocks
 // ---------------------------------------------------------------------------------------------
 
@@ -916,21 +1193,18 @@ float ASpinCityBuilder::LineWidthAt(const FVector2D& Pos) const
 void ASpinCityBuilder::AddHull(const FVector& Center, const FVector& Size, float Yaw, bool bRound)
 {
 	const int32 Band = HullBandAt(FVector2D(Center));
-	Pending.FindOrAdd(bRound ? HullCylinders[Band].Get() : HullBoxes[Band].Get())
-		.Add(FTransform(FRotator(0.f, Yaw, 0.f), Center, Size / MeshSize));
+	AddPending(bRound ? HullCylinders[Band].Get() : HullBoxes[Band].Get(), FTransform(FRotator(0.f, Yaw, 0.f), Center, Size / MeshSize));
 	BuiltRadius = FMath::Max(BuiltRadius, FVector2D(Center).Size() + FMath::Max(Size.X, Size.Y) * 0.5f);
 }
 
 void ASpinCityBuilder::AddNeonBox(int32 Slot, const FVector& Center, const FVector& Size, float Yaw)
 {
-	Pending.FindOrAdd(NeonBoxes[FMath::Abs(Slot) % NumSlots].Get())
-		.Add(FTransform(FRotator(0.f, Yaw, 0.f), Center, Size / MeshSize));
+	AddPending(NeonBoxes[FMath::Abs(Slot) % NumSlots].Get(), FTransform(FRotator(0.f, Yaw, 0.f), Center, Size / MeshSize));
 }
 
 void ASpinCityBuilder::AddNeonDisc(int32 Slot, const FVector& Center, float Radius, float Thickness)
 {
-	Pending.FindOrAdd(NeonDiscs[FMath::Abs(Slot) % NumSlots].Get())
-		.Add(FTransform(FRotator::ZeroRotator, Center, FVector(Radius * 2.f, Radius * 2.f, Thickness) / MeshSize));
+	AddPending(NeonDiscs[FMath::Abs(Slot) % NumSlots].Get(), FTransform(FRotator::ZeroRotator, Center, FVector(Radius * 2.f, Radius * 2.f, Thickness) / MeshSize));
 }
 
 void ASpinCityBuilder::AddNeonLine(int32 Slot, const FVector& A, const FVector& B, float Width)
@@ -941,8 +1215,7 @@ void ASpinCityBuilder::AddNeonLine(int32 Slot, const FVector& A, const FVector& 
 	{
 		return;
 	}
-	Pending.FindOrAdd(NeonBoxes[FMath::Abs(Slot) % NumSlots].Get())
-		.Add(FTransform(Delta.Rotation(), (A + B) * 0.5f, FVector(Length + Width, Width, Width) / MeshSize));
+	AddPending(NeonBoxes[FMath::Abs(Slot) % NumSlots].Get(), FTransform(Delta.Rotation(), (A + B) * 0.5f, FVector(Length + Width, Width, Width) / MeshSize));
 	BuiltRadius = FMath::Max(BuiltRadius, FMath::Max(FVector2D(A).Size(), FVector2D(B).Size()));
 }
 
@@ -977,7 +1250,7 @@ void ASpinCityBuilder::AddFloorLine(UInstancedStaticMeshComponent* ISM, const FV
 	const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Delta.Y, Delta.X));
 	const FVector2D Mid = (A + B) * 0.5f;
 	const float FloorWidth = FMath::Max(Width, MinFloorLineWidth);
-	Pending.FindOrAdd(ISM).Add(FTransform(FRotator(0.f, Yaw, 0.f), FVector(Mid.X, Mid.Y, FloorLineZ), FVector(Length, FloorWidth, 2.f) / MeshSize));
+	AddPending(ISM, FTransform(FRotator(0.f, Yaw, 0.f), FVector(Mid.X, Mid.Y, FloorLineZ), FVector(Length, FloorWidth, 2.f) / MeshSize));
 }
 
 void ASpinCityBuilder::AddFloorRing(UInstancedStaticMeshComponent* ISM, float Radius, float WidthScale, bool bFullCircle)
@@ -999,7 +1272,7 @@ void ASpinCityBuilder::AddFloorRing(UInstancedStaticMeshComponent* ISM, float Ra
 
 void ASpinCityBuilder::AddBeacon(const FVector& At, float Size)
 {
-	Pending.FindOrAdd(Beacons.Get()).Add(FTransform(FRotator::ZeroRotator, At, FVector(Size) / MeshSize));
+	AddPending(Beacons.Get(), FTransform(FRotator::ZeroRotator, At, FVector(Size) / MeshSize));
 }
 
 void ASpinCityBuilder::OutlineBox(int32 Slot, const FVector& Base, const FVector& Size, float Yaw, float Width, bool bVerticals)
@@ -1058,6 +1331,21 @@ void ASpinCityBuilder::Build()
 
 	Pending.Reset();
 	BuiltRadius = 0.f;
+	BuildingGlitches.Reset(); // their instances are being replaced anyway
+
+	// Fresh building records (see BeginBuilding), and a lookup from each layer to its id.
+	BuildingParts.Reset();
+	BuildingFirstPart.Reset();
+	BuildingNumParts.Reset();
+	BuildingBase.Reset();
+	BuildingSize.Reset();
+	CurrentBuilding = INDEX_NONE;
+	LayerIds.Reset();
+	const TArray<UInstancedStaticMeshComponent*> GlitchLayers = GetGlitchLayers();
+	for (int32 i = 0; i < GlitchLayers.Num(); ++i)
+	{
+		LayerIds.Add(GlitchLayers[i], i);
+	}
 
 	FRandomStream Rand(Seed);
 	BuildFloor();
@@ -1294,7 +1582,9 @@ void ASpinCityBuilder::BuildDistricts(FRandomStream& Rand)
 
 void ASpinCityBuilder::BuildBlock(FRandomStream& Rand, const FVector2D& Pos, float Yaw, float Footprint, float Height, float Dist)
 {
+	BeginBuilding(FVector(Pos, 0.f), Footprint);
 	BuildTower(Rand, Pos, Yaw, Footprint, Height, Dist);
+	EndBuilding();
 }
 
 void ASpinCityBuilder::BuildTower(FRandomStream& Rand, const FVector2D& Pos, float Yaw, float Footprint, float Height, float Dist)
@@ -1518,7 +1808,7 @@ void ASpinCityBuilder::BuildFacade(FRandomStream& Rand, const FVector2D& Pos, fl
 void ASpinCityBuilder::AddWindow(FRandomStream& Rand, bool bAmber, const FVector& Center, const FVector& Size, float FaceYaw)
 {
 	const int32 Group = (bAmber ? NumWindowGroups : 0) + Rand.RandRange(0, NumWindowGroups - 1);
-	Pending.FindOrAdd(WindowGroups[Group].Get()).Add(FTransform(FRotator(0.f, FaceYaw, 0.f), Center, Size / MeshSize));
+	AddPending(WindowGroups[Group].Get(), FTransform(FRotator(0.f, FaceYaw, 0.f), Center, Size / MeshSize));
 }
 
 void ASpinCityBuilder::AddSign(FRandomStream& Rand, int32 Slot, const FVector& Center, float FaceYaw, float SignWidth, float SignHeight, float Width)
@@ -1568,7 +1858,7 @@ void ASpinCityBuilder::AddSign(FRandomStream& Rand, int32 Slot, const FVector& C
 			const FVector Size = bHorizontal ? FVector(Depth, Length, Stroke) : FVector(Depth, Stroke, Length);
 			if (FaultyLettering)
 			{
-				Pending.FindOrAdd(FaultyLettering).Add(FTransform(FRotator(0.f, FaceYaw, 0.f), At, Size / MeshSize));
+				AddPending(FaultyLettering, FTransform(FRotator(0.f, FaceYaw, 0.f), At, Size / MeshSize));
 			}
 			else
 			{
@@ -1665,6 +1955,7 @@ void ASpinCityBuilder::BuildLandmarks(FRandomStream& Rand)
 			const float Rad = FMath::DegreesToRadians(AngleDeg);
 			const FVector Base(Dist * FMath::Cos(Rad), Dist * FMath::Sin(Rad), 0.f);
 			const float W = LineWidthAt(FVector2D(Base)) * 1.6f;
+			BeginBuilding(Base, BaseSide);
 
 			// Four tapering tiers, banded every so often, with a needle and beacon on top.
 			float Z = 0.f;
@@ -1684,6 +1975,7 @@ void ASpinCityBuilder::BuildLandmarks(FRandomStream& Rand)
 			}
 			AddNeonBox(Color, Base + FVector(0.f, 0.f, Z + 1500.f), FVector(W * 1.5f, W * 1.5f, 3000.f), AngleDeg);
 			AddBeacon(Base + FVector(0.f, 0.f, Z + 3100.f), W * 5.f);
+			EndBuilding();
 		}
 	}
 
@@ -1694,6 +1986,7 @@ void ASpinCityBuilder::BuildLandmarks(FRandomStream& Rand)
 		const float W = LineWidthAt(FVector2D(Base)) * 1.8f;
 		float Z = 0.f;
 		float Side = 11000.f;
+		BeginBuilding(Base, Side);
 		for (int32 Tier = 0; Tier < 7; ++Tier)
 		{
 			const float TierHeight = 1700.f;
@@ -1709,6 +2002,7 @@ void ASpinCityBuilder::BuildLandmarks(FRandomStream& Rand)
 		BuildHaloRing(0, Base, Side * 0.9f, Z + Needle.Z * 0.6f, W * 1.5f);
 		BuildHaloRing(2, Base, Side * 0.6f, Z + Needle.Z * 0.8f, W * 1.5f);
 		AddBeacon(Base + FVector(0.f, 0.f, Z + Needle.Z + W * 4.f), W * 6.f);
+		EndBuilding();
 	}
 }
 
@@ -1910,7 +2204,7 @@ void ASpinCityBuilder::BuildBridgeRoads(float X, float DeckEnd, float Deck)
 			const float Pitch = FMath::RadiansToDegrees(FMath::Atan2(B.Z - A.Z, Y1 - Y0));
 			const FRotator Rot(Pitch, S > 0.f ? 90.f : -90.f, 0.f);
 			const int32 Band = HullBandAt(Mid);
-			Pending.FindOrAdd(HullBoxes[Band].Get()).Add(FTransform(Rot, (A + B) * 0.5f, FVector(Length + 20.f, BridgeRoadWidth, Thickness) / MeshSize));
+			AddPending(HullBoxes[Band].Get(), FTransform(Rot, (A + B) * 0.5f, FVector(Length + 20.f, BridgeRoadWidth, Thickness) / MeshSize));
 			BuiltRadius = FMath::Max(BuiltRadius, FMath::Max(FVector2D(A).Size(), FVector2D(B).Size()));
 
 			// Lit edges (just above the surface) and, when raised, the underglow.

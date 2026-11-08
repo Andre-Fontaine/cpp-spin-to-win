@@ -283,6 +283,59 @@ public:
 	UPROPERTY(EditAnywhere, Category = "City|Ripples", meta = (ClampMin = "0"))
 	float HitRippleIntensity = 7.f;
 
+	// ---------------- Building glitches ----------------
+
+	/** Now and then a building glitches: for a split second it jumps sideways, squashes or stretches,
+	 *  or blinks out entirely, then snaps back. During a jam the whole skyline glitches: its layers
+	 *  (tower bodies, neon outlines, windows) jump apart and far more buildings glitch at once. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch")
+	bool bBuildingGlitches = true;
+
+	/** Buildings that start glitching per second at the starting speed, and at max speed. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0"))
+	float BuildingGlitchRateMin = 1.2f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0"))
+	float BuildingGlitchRateMax = 3.5f;
+
+	/** How long one building's glitch lasts (seconds), picked between these. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0.02"))
+	float BuildingGlitchMinTime = 0.12f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0.02"))
+	float BuildingGlitchMaxTime = 0.4f;
+
+	/** How far a glitching building jumps sideways, as a share of its width. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0"))
+	float BuildingGlitchShift = 0.06f;
+
+	/** Chance, each jump of a glitch, that the building blinks out entirely. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0", ClampMax = "1"))
+	float BuildingGlitchBlinkChance = 0.2f;
+
+	/** How many times a second a glitch jumps to a new offset. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "1"))
+	float BuildingGlitchStepRate = 18.f;
+
+	/** During a jam: how many times more buildings glitch, how much harder they jump, and the most
+	 *  that glitch at once. */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "1"))
+	float JamBuildingGlitchRateScale = 25.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "1"))
+	float JamBuildingGlitchStrength = 2.5f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "1"))
+	int32 MaxGlitchingBuildings = 80;
+
+	/** During a jam, how far the skyline's layers jump apart (world units), and how hard they squash
+	 *  and stretch (share of their height). */
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0"))
+	float JamLayerShift = 140.f;
+
+	UPROPERTY(EditAnywhere, Category = "City|Glitch", meta = (ClampMin = "0", ClampMax = "0.9"))
+	float JamLayerSquash = 0.25f;
+
 	// ---------------- Wind ----------------
 
 	/** Glowing specks and tumbling flakes carried through the air around the dial (0 = none). */
@@ -538,6 +591,18 @@ private:
 		const FLinearColor& Color, float Intensity, float Delay = 0.f);
 	/** True if this spot is open water (the lake or the river). */
 	bool IsOnWater(const FVector2D& Pos) const;
+
+	/** Building glitches (see bBuildingGlitches). While a building is being built, every instance it
+	 *  adds is recorded against it, so it can later be moved as one. */
+	void BeginBuilding(const FVector& Base, float Size);
+	void EndBuilding();
+	/** Every Pending instance goes through here, so a building under construction can record it. */
+	void AddPending(UInstancedStaticMeshComponent* ISM, const FTransform& Transform);
+	/** The instanced meshes buildings are made of, in a fixed order (parts refer to them by position). */
+	TArray<UInstancedStaticMeshComponent*> GetGlitchLayers() const;
+	void UpdateBuildingGlitches(float DeltaSeconds);
+	void UpdateJamLayers(float DeltaSeconds);
+	void EndBuildingGlitch(int32 GlitchIndex);
 	void UpdateFlyingCars(float DeltaSeconds);
 
 	/** The jam glitch: eases in or out with the jam, and while in, gives every light group a new
@@ -718,6 +783,16 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> MoteMID;
 
+	/** Glows that otherwise hold one brightness (tower haze, car lights, motes), with that brightness,
+	 *  so a blackout can take them down too (see ASpinGameMode::LightsLevel). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> SteadyGlowMIDs;
+
+	TArray<float> SteadyGlowIntensities;
+
+	/** The lights level last applied to SteadyGlowMIDs. */
+	float AppliedLightsLevel = 1.f;
+
 	/** Each window batch: current brightness (0..1), where it's heading, and seconds until it may switch. */
 	TArray<float> WindowLevel;
 	TArray<float> WindowTarget;
@@ -765,6 +840,44 @@ private:
 	float RippleOwed = 0.f;
 	float LastRippleHitTime = -1000.f;
 	TWeakObjectPtr<class ASpinCityFX> CityFX;
+
+	/** Every building's instances: each part packs its layer (see GetGlitchLayers) in the top 8 bits
+	 *  and its instance index below. Saved with the city, so play sessions have it. */
+	UPROPERTY()
+	TArray<int32> BuildingParts;
+
+	/** Each building: where its parts start in BuildingParts, how many, its base and its width. */
+	UPROPERTY()
+	TArray<int32> BuildingFirstPart;
+
+	UPROPERTY()
+	TArray<int32> BuildingNumParts;
+
+	UPROPERTY()
+	TArray<FVector> BuildingBase;
+
+	UPROPERTY()
+	TArray<float> BuildingSize;
+
+	/** The building being built right now (INDEX_NONE outside one), and the layer lookup used while building. */
+	int32 CurrentBuilding = INDEX_NONE;
+	TMap<UInstancedStaticMeshComponent*, int32> LayerIds;
+
+	struct FBuildingGlitch
+	{
+		int32 Building = INDEX_NONE;
+		float TimeLeft = 0.f;
+		float StepTimer = 0.f;
+		float Strength = 1.f;
+		/** The parts' resting transforms, to put them back afterwards. */
+		TArray<FTransform> Rest;
+	};
+	TArray<FBuildingGlitch> BuildingGlitches;
+	float BuildingGlitchOwed = 0.f;
+
+	/** Jam layer glitch: seconds until the next jump, and whether the layers are currently displaced. */
+	float JamLayerTimer = 0.f;
+	bool bJamLayersMoved = false;
 
 	struct FFlyingCar
 	{

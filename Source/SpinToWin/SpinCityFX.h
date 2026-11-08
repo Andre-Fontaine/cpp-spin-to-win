@@ -198,6 +198,9 @@ private:
 	/** 0..1 hit pulse from the game mode (0 if there isn't one). */
 	float GetHitPulse() const;
 
+	/** The game mode's lights level (1 normally, low during a blackout). */
+	float GetLightsLevel() const;
+
 	/** How far into the reveal the current run is: 0 = just started, 1 = whole city lit.
 	 *  Negative when no run is going (on the menus). */
 	float GetRevealProgress() const;
