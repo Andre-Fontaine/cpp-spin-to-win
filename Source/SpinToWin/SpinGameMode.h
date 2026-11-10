@@ -114,6 +114,10 @@ enum class EMenuAction : uint8
 	CancelDeleteProfile,
 	ConfirmName,
 	CancelName,
+	/** On-screen keyboard (name entry with a gamepad): Index = the character to type. */
+	NameKey,
+	/** On-screen keyboard: erase the last character. */
+	NameBackspace,
 	/** Pause menu: back into the run. */
 	ResumeGame,
 	/** Pause menu: start the same kind of run over. */

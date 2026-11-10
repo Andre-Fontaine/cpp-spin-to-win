@@ -1544,7 +1544,15 @@ void ASpinGameMode::HandleMenuBack()
 		break;
 
 	case ESpinState::NameEntry:
-		CancelName();
+		// Back erases what's been typed, one character at a time, then leaves.
+		if (NameEntryText.IsEmpty())
+		{
+			CancelName();
+		}
+		else
+		{
+			EraseNameChar();
+		}
 		break;
 
 	case ESpinState::GameOver:
@@ -1559,10 +1567,15 @@ void ASpinGameMode::HandleMenuBack()
 
 void ASpinGameMode::HandleStartButton()
 {
-	// On the screens right before a run, Start starts it; during a run it pauses.
+	// On the screens right before a run, Start starts it; on name entry it's "done"; during a run it pauses.
 	if (State == ESpinState::ModifierSelect)
 	{
 		StartGame();
+		return;
+	}
+	if (State == ESpinState::NameEntry)
+	{
+		ConfirmName();
 		return;
 	}
 	TogglePauseMenu();
@@ -2371,6 +2384,18 @@ void ASpinGameMode::HandleMenuAction(EMenuAction Action, int32 Index)
 
 	case EMenuAction::CancelName:
 		CancelName();
+		break;
+
+	case EMenuAction::NameKey:
+		// Only what a name may hold - the on-screen keyboard offers nothing else, but a stray index mustn't sneak in.
+		if (Index > 0 && Index < 128 && (FChar::IsAlnum(static_cast<TCHAR>(Index)) || Index == TEXT(' ')))
+		{
+			TypeNameChar(FChar::ToUpper(static_cast<TCHAR>(Index)));
+		}
+		break;
+
+	case EMenuAction::NameBackspace:
+		EraseNameChar();
 		break;
 
 	case EMenuAction::Play:
@@ -3279,11 +3304,15 @@ void ASpinGameMode::OpenUpgradePick()
 		Pool.Add(Upgrade);
 	}
 
+	// One card of each kind, always in the same order: boon, gamble, curse.
 	UpgradeOffer.Reset();
-	while (UpgradeOffer.Num() < UpgradeChoices && Pool.Num() > 0)
+	for (const ESpinUpgradeKind Kind : { ESpinUpgradeKind::Boon, ESpinUpgradeKind::Gamble, ESpinUpgradeKind::Curse })
 	{
-		UpgradeOffer.Add(Pool[FMath::RandRange(0, Pool.Num() - 1)]);
-		Pool.RemoveSingleSwap(UpgradeOffer.Last());
+		TArray<ESpinUpgrade> OfKind = Pool.FilterByPredicate([Kind](ESpinUpgrade Upgrade) { return GetUpgradeInfo(Upgrade).Kind == Kind; });
+		if (OfKind.Num() > 0)
+		{
+			UpgradeOffer.Add(OfKind[FMath::RandRange(0, OfKind.Num() - 1)]);
+		}
 	}
 
 	if (Clock)

@@ -1416,7 +1416,7 @@ void ASpinCityBuilder::BuildPlaza()
 	// floats on the water's surface instead of lying on the floor beneath it.
 	FloorLineZ = GetShoreX() > PlazaRadius ? 5.f : 1.f;
 
-	for (const float R : { 900.f, 1300.f, 1950.f })
+	for (const float R : { 1300.f, 1950.f })
 	{
 		AddFloorRing(RingRoadLines, R, 1.f, true);
 	}

@@ -113,10 +113,12 @@ public:
 	/** Moves the highlight to the nearest item in that direction (DY -1 = up), wrapping around at the ends. */
 	void MoveFocus(int32 DX, int32 DY);
 
-	void SetFocus(const FSpinFocusKey& Key);
+	/** Highlights an item, with a click if the highlight actually moved (unless !bPlaySound). */
+	void SetFocus(const FSpinFocusKey& Key, bool bPlaySound = true);
 
-	/** The flash and burst of sparks when an item is pressed. */
-	void NotifyActivated(const FSpinFocusKey& Key, const FBox2D& Rect);
+	/** The flash, burst of sparks and whir when an item is pressed. bAdjust = a setting's value was
+	 *  nudged left / right instead, which gets a lighter tick. */
+	void NotifyActivated(const FSpinFocusKey& Key, const FBox2D& Rect, bool bAdjust = false);
 
 private:
 	// ---------------- Primitives ----------------
@@ -260,15 +262,12 @@ private:
 
 	// ---------------- Ambient effects ----------------
 
-	/** The chrome around every menu screen: neon corner brackets, status read-outs, blinking
-	 *  lights, the odd electric arc along an edge, and sparks falling from the corners. */
+	/** The chrome around every menu screen: neon corner brackets, the time and player name,
+	 *  the odd electric arc along an edge, and sparks falling from the corners. */
 	void DrawScreenFrame(const ASpinGameMode& GM);
 
 	/** The quieter version during a run: corner brackets that flash with each hit. */
 	void DrawRunChrome(const ASpinGameMode& GM);
-
-	/** What the controls do on this screen, along the bottom ("D-PAD move   A select   B back"). */
-	void DrawNavLegend(const ASpinGameMode& GM);
 
 	/** The screen switching on: it opens out from a bright line across the middle, like an old CRT. */
 	void DrawScreenReveal();
@@ -287,6 +286,11 @@ private:
 	void ValidateFocus();
 
 	void UpdateFocusAnimations();
+
+	/** Plays one of the clock's menu sounds (ASpinClock::MenuMoveSound etc.), slightly varied in
+	 *  pitch so a quick run of them doesn't sound like a machine gun. */
+	enum class EMenuSound : uint8 { Move, Select, Adjust };
+	void PlayMenuSound(EMenuSound Sound) const;
 
 	// ---------------- In-run HUD ----------------
 

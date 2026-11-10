@@ -189,6 +189,27 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Clock|Music", meta = (ClampMin = "0", ClampMax = "1"))
 	float MusicPauseVolume = 0.4f;
 
+	// ---------------- Sound effects ----------------
+
+	/** Plays a flat 2D sound that keeps playing through a pause (for the menus). Null is silent. */
+	void PlayUISound(USoundBase* Sound, float Volume = 1.f, float Pitch = 1.f) const;
+
+	/** A light click as the menu highlight moves from one item to another. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Sound")
+	TObjectPtr<USoundBase> MenuMoveSound;
+
+	/** A mechanical whir when a menu item is pressed. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Sound")
+	TObjectPtr<USoundBase> MenuSelectSound;
+
+	/** A small tick when left / right nudges a setting's value, or one of its < > arrows is clicked. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Sound")
+	TObjectPtr<USoundBase> MenuAdjustSound;
+
+	/** Volume (0..1) of all the menu sounds above. */
+	UPROPERTY(EditAnywhere, Category = "Clock|Sound", meta = (ClampMin = "0", ClampMax = "1"))
+	float MenuSoundVolume = 0.7f;
+
 	// ---------------- Layout ----------------
 
 	/** Radius of the dial in world units. Everything else scales from this. */

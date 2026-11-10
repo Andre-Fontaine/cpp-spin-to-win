@@ -117,22 +117,6 @@ namespace
 		return GM.Prompts.IsValidIndex(Index) ? GM.Prompts[Index].Color : TextMain;
 	}
 
-	bool IsPadInput(const ASpinGameMode& GM)
-	{
-		return GM.InputStyle != ESpinInputStyle::Keyboard;
-	}
-
-	/** What selects the highlighted menu item / backs out, on the input in use. */
-	FString ConfirmKeyOf(const ASpinGameMode& GM)
-	{
-		return IsPadInput(GM) ? GM.GetButtonKey(0) : FString(TEXT("ENTER"));
-	}
-
-	FString BackKeyOf(const ASpinGameMode& GM)
-	{
-		return IsPadInput(GM) ? GM.GetButtonKey(1) : FString(TEXT("ESC"));
-	}
-
 	float Pulse01(float Time, float Speed)
 	{
 		return 0.5f + 0.5f * FMath::Sin(Time * Speed);
@@ -404,10 +388,6 @@ void ASpinHUD::DrawHUD()
 	{
 		AmbientLevel = 1.f;
 		DrawScreenFrame(*GM);
-		if (GM->IsMenuScreen())
-		{
-			DrawNavLegend(*GM);
-		}
 	}
 
 	ValidateFocus();
@@ -1438,66 +1418,6 @@ void ASpinHUD::DrawRunChrome(const ASpinGameMode& GM)
 	DrawNeonLine(FVector2D(M, ScreenH - M), FVector2D(M, ScreenH - M - L), ColorB, Thick, Glow);
 }
 
-void ASpinHUD::DrawNavLegend(const ASpinGameMode& GM)
-{
-	const bool bPad = IsPadInput(GM);
-	const bool bPaused = GM.IsPauseMenuOpen();
-
-	// Typing a name has its own key row; the arrows type rather than move there.
-	if (!bPad && GM.State == ESpinState::NameEntry)
-	{
-		return;
-	}
-
-	// No backing out of an upgrade pick - one has to be chosen.
-	const bool bHasBack = bPaused || (GM.State != ESpinState::WaitingToStart && GM.State != ESpinState::UpgradeSelect);
-	const TCHAR* BackLabel = bPaused ? TEXT("RESUME")
-		: GM.State == ESpinState::GameOver ? TEXT("MAIN MENU")
-		: GM.State == ESpinState::NameEntry ? TEXT("CANCEL")
-		: TEXT("BACK");
-
-	TArray<TPair<FString, FString>> Items;
-	auto AddItem = [&Items](const FString& Key, const FString& Label) { Items.Emplace(Key, Label); };
-	if (bPad)
-	{
-		AddItem(TEXT("D-PAD"), TEXT("MOVE"));
-		AddItem(GM.GetButtonKey(0), TEXT("SELECT"));
-	}
-	else
-	{
-		AddItem(TEXT("MOUSE"), TEXT("POINT + CLICK"));
-		AddItem(TEXT("ARROWS"), TEXT("MOVE"));
-		AddItem(TEXT("ENTER"), TEXT("SELECT"));
-	}
-	if (bHasBack)
-	{
-		AddItem(BackKeyOf(GM), BackLabel);
-	}
-	if (!bPaused && GM.State == ESpinState::ModifierSelect)
-	{
-		AddItem(GM.GetPauseKey(), TEXT("START RUN"));
-	}
-
-	const float Size = 13.f;
-	const float Space = U(8.f);
-	const float ItemGap = U(28.f);
-	float TotalW = 0.f;
-	for (const TPair<FString, FString>& Item : Items)
-	{
-		TotalW += KeyCapWidth(Item.Key, Size) + Space + MeasureText(Item.Value, Size, true).X;
-	}
-	TotalW += ItemGap * (Items.Num() - 1);
-
-	const float CapH = KeyCapHeight(Size);
-	const float Y = ScreenH - U(30.f) - CapH;
-	float X = ScreenW * 0.5f - TotalW * 0.5f;
-	for (const TPair<FString, FString>& Item : Items)
-	{
-		X += DrawKeyCap(Item.Key, X, Y, Size, Fade(Cyan, 0.85f), false) + Space;
-		X += DrawLabel(Item.Value, X, Y + (CapH - LineH(Size)) * 0.5f, Size, TextDim, ESpinTextAlign::Left, true) + ItemGap;
-	}
-}
-
 void ASpinHUD::DrawScreenReveal()
 {
 	const float T = (UiTime - ScreenEnterTime) / RevealDuration;
@@ -1702,10 +1622,30 @@ const FSpinMenuRegion* ASpinHUD::FindRegionAt(const FVector2D& Point, bool bFocu
 	return nullptr;
 }
 
-void ASpinHUD::SetFocus(const FSpinFocusKey& Key)
+void ASpinHUD::SetFocus(const FSpinFocusKey& Key, bool bPlaySound)
 {
+	if (bPlaySound && bHasFocus && !(Key == Focus))
+	{
+		PlayMenuSound(EMenuSound::Move);
+	}
 	Focus = Key;
 	bHasFocus = true;
+}
+
+void ASpinHUD::PlayMenuSound(EMenuSound Sound) const
+{
+	const ASpinGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ASpinGameMode>() : nullptr;
+	const ASpinClock* Clock = GM ? GM->GetClock() : nullptr;
+	if (!Clock)
+	{
+		return;
+	}
+	switch (Sound)
+	{
+	case EMenuSound::Move:   Clock->PlayUISound(Clock->MenuMoveSound, 1.f, FMath::FRandRange(0.96f, 1.04f)); break;
+	case EMenuSound::Select: Clock->PlayUISound(Clock->MenuSelectSound, 1.f, FMath::FRandRange(0.98f, 1.02f)); break;
+	case EMenuSound::Adjust: Clock->PlayUISound(Clock->MenuAdjustSound, 1.f, FMath::FRandRange(0.95f, 1.05f)); break;
+	}
 }
 
 void ASpinHUD::MoveFocus(int32 DX, int32 DY)
@@ -1795,10 +1735,11 @@ void ASpinHUD::MoveFocus(int32 DX, int32 DY)
 	}
 }
 
-void ASpinHUD::NotifyActivated(const FSpinFocusKey& Key, const FBox2D& Rect)
+void ASpinHUD::NotifyActivated(const FSpinFocusKey& Key, const FBox2D& Rect, bool bAdjust)
 {
 	LastActivated = Key;
 	ActivatedTime = UiTime;
+	PlayMenuSound(bAdjust ? EMenuSound::Adjust : EMenuSound::Select);
 
 	// A burst of sparks off the edges of whatever was pressed.
 	const FVector2D Size = Rect.GetSize();
@@ -2502,19 +2443,6 @@ void ASpinHUD::DrawMainMenu(const ASpinGameMode& GM)
 	}
 	Y += LineH(HeroSize);
 
-	// The tagline types itself out.
-	{
-		const FString Tagline = TEXT("Hit the zone.  Flip the spin.  Don't slow down.");
-		const int32 Shown = FMath::Clamp(FMath::FloorToInt((SinceEnter - 0.2f) * 50.f), 0, Tagline.Len());
-		const float FullW = MeasureText(Tagline, BodySize).X;
-		const bool bTyping = Shown < Tagline.Len();
-		const bool bCursor = bTyping || FMath::Fmod(UiTime, 1.f) < 0.5f;
-		const float TextW = DrawLabel(Tagline.Left(Shown), CX - FullW * 0.5f, Y, BodySize, TextDim);
-		if (bCursor)
-		{
-			DrawRect(Fade(Cyan, 0.8f), CX - FullW * 0.5f + TextW + U(3.f), Y + U(4.f), U(9.f), LineH(BodySize) - U(8.f));
-		}
-	}
 	Y += LineH(BodySize) + U(36.f);
 
 	const float BtnW = FMath::Min(U(380.f), ScreenW - U(Margin) * 2.f);
@@ -2524,7 +2452,10 @@ void ASpinHUD::DrawMainMenu(const ASpinGameMode& GM)
 	const FString Name = GM.GetPlayerName();
 	DrawMenuButton(BtnX, Y, BtnW, U(50.f), Name.IsEmpty() ? FString(TEXT("ADD A PLAYER")) : FString::Printf(TEXT("PLAYER:  %s"), *Name), EMenuAction::OpenProfiles, Cyan);
 	Y += U(56.f);
-	DrawLabel(Name.IsEmpty() ? TEXT("Runs are saved under your name") : TEXT("Select to switch player"), CX, Y, TinySize, TextFaint, ESpinTextAlign::Center);
+	if (Name.IsEmpty())
+	{
+		DrawLabel(TEXT("Runs are saved under your name"), CX, Y, TinySize, TextFaint, ESpinTextAlign::Center);
+	}
 	Y += LineH(TinySize) + U(24.f);
 
 	const float BtnH = U(64.f);
@@ -2548,9 +2479,7 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 
 	const float Gap = U(28.f);
 	const float CardW = FMath::Min(U(380.f), (ScreenW - U(Margin) * 2.f - Gap * 2.f) / 3.f);
-	const float CardH = U(260.f);
-	const bool bPad = IsPadInput(GM);
-	const FString ConfirmKey = ConfirmKeyOf(GM);
+	const float CardH = U(220.f);
 
 	auto DrawCard = [&](float X, const FString& Title, const FLinearColor& Accent, const FString& Description, EMenuAction Action)
 	{
@@ -2571,17 +2500,6 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 		LineY += LineH(TitleSize) + U(8.f);
 		DrawWrapped(Description, CardCX, LineY, BodySize, FMath::Lerp(TextDim, TextMain, F), CardW - U(48.f));
 
-		// What selecting it does - brightest while it's highlighted.
-		const float PromptY = Y + CardH - U(22.f) - KeyCapHeight(SmallSize);
-		const float PromptAlpha = 0.35f + 0.65f * F;
-		if (bPad)
-		{
-			DrawKeyPrompt(TEXT("Press"), ConfirmKey, TEXT("to start"), CardCX, PromptY, SmallSize, Fade(Accent, PromptAlpha));
-		}
-		else
-		{
-			DrawLabel(TEXT("CLICK TO START"), CardCX, PromptY + (KeyCapHeight(SmallSize) - LineH(SmallSize)) * 0.5f, SmallSize, Fade(Accent, PromptAlpha), ESpinTextAlign::Center, true);
-		}
 		AddRegion(X, Y, CardW, CardH, Action);
 	};
 
@@ -2639,7 +2557,7 @@ void ASpinHUD::DrawModeSelect(const ASpinGameMode& GM)
 	Y = InfoBottom + U(20.f);
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, BackKeyOf(GM));
+	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
 }
 
 void ASpinHUD::DrawRunSetup(const ASpinGameMode& GM)
@@ -2828,7 +2746,7 @@ void ASpinHUD::DrawRunSetup(const ASpinGameMode& GM)
 	const float BtnX = CX - BtnGap * 0.5f - BtnW;
 	DrawMenuButton(BtnX, BtnY, BtnW, BtnH, TEXT("START"), EMenuAction::StartEndless, Gold);
 	MarkDefaultFocus();
-	DrawMenuButton(BtnX + BtnW + BtnGap, BtnY, BtnW, BtnH, TEXT("BACK"), EMenuAction::Back, TextDim, BackKeyOf(GM));
+	DrawMenuButton(BtnX + BtnW + BtnGap, BtnY, BtnW, BtnH, TEXT("BACK"), EMenuAction::Back, TextDim);
 }
 
 void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
@@ -2885,7 +2803,7 @@ void ASpinHUD::DrawSettings(const ASpinGameMode& GM)
 	DrawRow(3, TEXT("CONTROLLER ICONS"), GM.GetControllerIconsLabel(), EMenuAction::ToggleControllerIcons, EMenuAction::ToggleControllerIcons);
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y + NumRows * RowH + P * 2.f + U(32.f), BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, BackKeyOf(GM));
+	DrawMenuButton(CX - BackW * 0.5f, Y + NumRows * RowH + P * 2.f + U(32.f), BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
 }
 
 void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
@@ -2993,7 +2911,7 @@ void ASpinHUD::DrawLeaderboard(const ASpinGameMode& GM)
 	Y += LineH(TinySize) + U(20.f);
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, BackKeyOf(GM));
+	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
 }
 
 void ASpinHUD::DrawProfileSelect(const ASpinGameMode& GM)
@@ -3088,15 +3006,19 @@ void ASpinHUD::DrawProfileSelect(const ASpinGameMode& GM)
 	Y += RowH + U(28.f);
 
 	const float BackW = U(220.f);
-	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim, BackKeyOf(GM));
+	DrawMenuButton(CX - BackW * 0.5f, Y, BackW, U(50.f), TEXT("BACK"), EMenuAction::Back, TextDim);
 }
 
 void ASpinHUD::DrawNameEntry(const ASpinGameMode& GM)
 {
 	DrawBackdrop(0.86f);
 
+	// With a gamepad, an on-screen keyboard appears under the name box (and the screen moves up to
+	// make room). With a keyboard, the player just types.
+	const bool bPad = GM.InputStyle != ESpinInputStyle::Keyboard;
+
 	const float CX = ScreenW * 0.5f;
-	float Y = DrawScreenTitle(TEXT("WHAT'S YOUR NAME?"), TEXT("It goes on the leaderboard next to your runs"), CX, ScreenH * 0.2f, Cyan) + U(10.f);
+	float Y = DrawScreenTitle(TEXT("WHAT'S YOUR NAME?"), TEXT("It goes on the leaderboard next to your runs"), CX, ScreenH * (bPad ? 0.1f : 0.2f), Cyan) + U(10.f);
 
 	// The text box, with a blinking block cursor.
 	const float BoxW = FMath::Min(U(540.f), ScreenW - U(Margin) * 2.f);
@@ -3125,30 +3047,51 @@ void ASpinHUD::DrawNameEntry(const ASpinGameMode& GM)
 	DrawLabel(FString::Printf(TEXT("%d / %d"), GM.NameEntryText.Len(), USpinSaveGame::MaxNameLength), BoxX + BoxW - U(12.f), Y + BoxH + U(6.f), TinySize, TextFaint, ESpinTextAlign::Right);
 	Y += BoxH + U(34.f);
 
-	// [ENTER] confirm   [BKSP] erase   [ESC] cancel
+	if (bPad)
 	{
-		const float Size = SmallSize;
-		const TPair<const TCHAR*, const TCHAR*> Keys[] = { { TEXT("ENTER"), TEXT("confirm") }, { TEXT("BKSP"), TEXT("erase") }, { TEXT("ESC"), TEXT("cancel") } };
-		const float Space = U(8.f);
-		const float ItemGap = U(30.f);
-		float TotalW = 0.f;
-		for (const auto& Key : Keys)
+		// The on-screen keyboard, laid out QWERTY: the number row, then the three letter rows, each
+		// staggered like a real keyboard (Indent is in keys), then a wide SPACE bar. DEL sits at the
+		// end of the bottom letter row, where backspace-ish keys live. Each key is a menu item, so
+		// the D-pad moves between them and A types the highlighted one.
+		struct FKeyRow { const TCHAR* Keys; float Indent; };
+		const FKeyRow Rows[] =
 		{
-			TotalW += KeyCapWidth(Key.Key, Size) + Space + MeasureText(Key.Value, Size).X;
+			{ TEXT("1234567890"), 0.f },
+			{ TEXT("QWERTYUIOP"), 0.f },
+			{ TEXT("ASDFGHJKL"),  0.5f },
+			{ TEXT("ZXCVBNM"),    1.f },
+		};
+		const float Key = U(54.f);
+		const float KeyGap = U(8.f);
+		const float Step = Key + KeyGap;
+		const float GridW = 10.f * Key + 9.f * KeyGap;
+		const float GridX = CX - GridW * 0.5f;
+		for (int32 Row = 0; Row < UE_ARRAY_COUNT(Rows); ++Row)
+		{
+			const FString Letters(Rows[Row].Keys);
+			const float RowX = GridX + Rows[Row].Indent * Step;
+			for (int32 Col = 0; Col < Letters.Len(); ++Col)
+			{
+				const TCHAR Char = Letters[Col];
+				DrawMenuButton(RowX + Col * Step, Y, Key, Key, FString::Chr(Char), EMenuAction::NameKey, Cyan, FString(), true, static_cast<int32>(Char));
+				if (Char == TEXT('Q'))
+				{
+					MarkDefaultFocus(); // start on the first letter
+				}
+			}
+			if (Row == UE_ARRAY_COUNT(Rows) - 1)
+			{
+				DrawMenuButton(RowX + Letters.Len() * Step, Y, Key * 2.f + KeyGap, Key, TEXT("DEL"), EMenuAction::NameBackspace, Red);
+			}
+			Y += Step;
 		}
-		TotalW += ItemGap * static_cast<float>(UE_ARRAY_COUNT(Keys) - 1);
 
-		float KeyX = CX - TotalW * 0.5f;
-		const float CapH = KeyCapHeight(Size);
-		for (const auto& Key : Keys)
-		{
-			KeyX += DrawKeyCap(Key.Key, KeyX, Y, Size, Cyan, false) + Space;
-			KeyX += DrawLabel(Key.Value, KeyX, Y + (CapH - LineH(Size)) * 0.5f, Size, TextDim) + ItemGap;
-		}
-		Y += CapH + U(14.f);
+		// The space bar, centred under the letters.
+		const float SpaceW = 6.f * Key + 5.f * KeyGap;
+		DrawMenuButton(CX - SpaceW * 0.5f, Y, SpaceW, Key, TEXT("SPACE"), EMenuAction::NameKey, Cyan, FString(), true, static_cast<int32>(TEXT(' ')));
+		Y += Step + U(10.f);
 	}
 
-	DrawLabel(TEXT("Letters, numbers and spaces  -  keyboard only"), CX, Y, TinySize, TextFaint, ESpinTextAlign::Center);
 	Y += LineH(TinySize) + U(10.f);
 
 	if (!GM.NameEntryError.IsEmpty())
@@ -3161,7 +3104,10 @@ void ASpinHUD::DrawNameEntry(const ASpinGameMode& GM)
 	const float BtnH = U(56.f);
 	const float Gap = U(20.f);
 	DrawMenuButton(CX - Gap * 0.5f - BtnW, Y, BtnW, BtnH, TEXT("OK"), EMenuAction::ConfirmName, Green);
-	MarkDefaultFocus();
+	if (!bPad)
+	{
+		MarkDefaultFocus(); // with a gamepad, the keyboard's first key is highlighted first
+	}
 	DrawMenuButton(CX + Gap * 0.5f, Y, BtnW, BtnH, TEXT("CANCEL"), EMenuAction::CancelName, TextDim);
 }
 
@@ -3362,7 +3308,7 @@ void ASpinHUD::DrawGameOver(const ASpinGameMode& GM)
 	const float BtnW = (CardW - P * 2.f - BtnGap * 2.f) / 3.f;
 	DrawMenuButton(X + P, Y, BtnW, BtnH, TEXT("RETRY"), EMenuAction::RetryGame, Gold, FString(), bReady);
 	MarkDefaultFocus();
-	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, bReady ? BackKeyOf(GM) : FString(), bReady);
+	DrawMenuButton(X + P + BtnW + BtnGap, Y, BtnW, BtnH, TEXT("MAIN MENU"), EMenuAction::ReturnToMainMenu, Cyan, FString(), bReady);
 	DrawMenuButton(X + P + (BtnW + BtnGap) * 2.f, Y, BtnW, BtnH, TEXT("QUIT"), EMenuAction::QuitGame, Red, FString(), bReady);
 }
 
@@ -3375,7 +3321,6 @@ void ASpinHUD::DrawPauseMenu(const ASpinGameMode& GM)
 	const float P = U(32.f);
 	const float BtnH = U(60.f);
 	const float BtnGap = U(14.f);
-	const float PromptSize = 18.f;
 
 	// Where the run is, so the player knows what they'd be restarting or leaving.
 	FString Eyebrow;
@@ -3388,9 +3333,9 @@ void ASpinHUD::DrawPauseMenu(const ASpinGameMode& GM)
 		Eyebrow = FString::Printf(TEXT("%s  -  LEVEL %d"), GM.bDailyRun ? TEXT("DAILY CHALLENGE") : TEXT("ENDLESS"), GM.GetLevel());
 	}
 	const FString Warning = GM.IsTutorial() ? FString() : FString(TEXT("Restarting or leaving won't save this run."));
-	const float WarningH = Warning.IsEmpty() ? 0.f : LineH(SmallSize) + U(14.f);
+	const float WarningH = Warning.IsEmpty() ? 0.f : U(20.f) + LineH(SmallSize);
 
-	const float CardH = P + LineH(TinySize) + U(6.f) + LineH(TitleSize) + U(24.f) + BtnH * 3.f + BtnGap * 2.f + U(20.f) + WarningH + KeyCapHeight(PromptSize) + P;
+	const float CardH = P + LineH(TinySize) + U(6.f) + LineH(TitleSize) + U(24.f) + BtnH * 3.f + BtnGap * 2.f + WarningH + P;
 	const float X = CX - CardW * 0.5f;
 	float Y = (ScreenH - CardH) * 0.5f;
 	DrawPanel(X, Y, CardW, CardH, Cyan);
@@ -3415,10 +3360,7 @@ void ASpinHUD::DrawPauseMenu(const ASpinGameMode& GM)
 	if (!Warning.IsEmpty())
 	{
 		DrawLabel(Warning, CX, Y, SmallSize, TextDim, ESpinTextAlign::Center);
-		Y += WarningH;
 	}
-
-	DrawKeyPrompt(TEXT("Press"), GM.GetPauseKey(), TEXT("to resume"), CX, Y, PromptSize, Gold);
 }
 
 void ASpinHUD::DrawUpgradePick(const ASpinGameMode& GM)

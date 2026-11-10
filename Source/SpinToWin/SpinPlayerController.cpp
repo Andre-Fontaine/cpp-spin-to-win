@@ -73,9 +73,10 @@ bool ASpinPlayerController::TryHandleMenuClick()
 				// arrow, onto the row it belongs to).
 				if (const FSpinMenuRegion* Focusable = SpinHUD->FindRegionAt(Mouse, true))
 				{
-					SpinHUD->SetFocus(Focusable->GetKey());
+					SpinHUD->SetFocus(Focusable->GetKey(), /*bPlaySound*/ false);
 				}
-				SpinHUD->NotifyActivated(Region.GetKey(), Region.Rect);
+				// The only click-only parts are a settings row's < > arrows: those nudge a value.
+				SpinHUD->NotifyActivated(Region.GetKey(), Region.Rect, /*bAdjust*/ !Region.bFocusable);
 				GM->HandleMenuAction(Region.Action, Region.Index);
 			}
 		}
@@ -267,6 +268,12 @@ void ASpinPlayerController::OnButton2()
 {
 	if (IsInMenuState())
 	{
+		// On name entry, X (Square) is backspace for the on-screen keyboard.
+		ASpinGameMode* GM = GetSpinGameMode();
+		if (GM && GM->State == ESpinState::NameEntry)
+		{
+			GM->EraseNameChar();
+		}
 		return;
 	}
 	PressButton(2);
@@ -325,7 +332,7 @@ void ASpinPlayerController::Navigate(int32 DX, int32 DY)
 			const EMenuAction Action = DX < 0 ? Focused->LeftAction : Focused->RightAction;
 			if (Action != EMenuAction::None)
 			{
-				SpinHUD->NotifyActivated({ Action, INDEX_NONE }, Focused->Rect);
+				SpinHUD->NotifyActivated({ Action, INDEX_NONE }, Focused->Rect, /*bAdjust*/ true);
 				GM->HandleMenuAction(Action);
 				return;
 			}

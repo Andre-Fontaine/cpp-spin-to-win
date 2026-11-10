@@ -274,6 +274,14 @@ ASpinClock::ASpinClock()
 	MenuMusicPlayer = MakeMusicPlayer(TEXT("MenuMusicPlayer"));
 	RunMusicPlayer = MakeMusicPlayer(TEXT("RunMusicPlayer"));
 
+	// Menu sounds (Content/Audio/UI), assigned here so a fresh clock already has them.
+	static ConstructorHelpers::FObjectFinder<USoundBase> MenuMoveFinder(TEXT("/Game/Audio/UI/UI_Click.UI_Click"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> MenuSelectFinder(TEXT("/Game/Audio/UI/UI_Whir.UI_Whir"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> MenuAdjustFinder(TEXT("/Game/Audio/UI/UI_Tick.UI_Tick"));
+	MenuMoveSound = MenuMoveFinder.Succeeded() ? MenuMoveFinder.Object : nullptr;
+	MenuSelectSound = MenuSelectFinder.Succeeded() ? MenuSelectFinder.Object : nullptr;
+	MenuAdjustSound = MenuAdjustFinder.Succeeded() ? MenuAdjustFinder.Object : nullptr;
+
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(Root);
 	Camera->bConstrainAspectRatio = false; // no black bars on non-16:9 windows
@@ -1078,6 +1086,14 @@ void ASpinClock::StartNextRunTrack()
 		LastRunTrack = Track;
 		RunMusicPlayer->SetSound(Track);
 		RunMusicPlayer->FadeIn(MusicFadeTime);
+	}
+}
+
+void ASpinClock::PlayUISound(USoundBase* Sound, float Volume, float Pitch) const
+{
+	if (Sound)
+	{
+		UGameplayStatics::PlaySound2D(this, Sound, Volume * MenuSoundVolume, Pitch, 0.f, nullptr, nullptr, /*bIsUISound*/ true);
 	}
 }
 
